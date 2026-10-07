@@ -1,11 +1,11 @@
 import { PAYMENT_ERROR_MESSAGES } from "../constants/payment.response";
-import { CreditCustomerModel } from "../models/credit-customer.model";
 import { CreditTransactionModel } from "../models/credit-transaction.model";
 import { OrderModel } from "../models/order.model";
 import { PaymentModel } from "../models/payment.model";
 import { ProcessPaymentData, RefundData } from "../types/payment.types";
 import { ApiError } from "../utils/ApiError";
 import { calculateDueDate } from "../utils/payment";
+import { transaction } from "../config/database";
 
 export class PaymentService {
   /**
@@ -80,108 +80,139 @@ export class PaymentService {
   //   };
   // }
 
+  /** Convert NPR rupees to integer paisa to avoid float comparison bugs */
+  private static toPaisa(amount: number | string): number {
+    return Math.round(Number(amount) * 100);
+  }
+
   static async processPayment(orderId: string, paymentData: ProcessPaymentData) {
-    const order = await OrderModel.findById(orderId);
-    if (!order) throw ApiError.notFound(PAYMENT_ERROR_MESSAGES.ORDER_NOT_FOUND);
-  
-    if (order.status === 'cancelled') {
-      throw ApiError.badRequest(PAYMENT_ERROR_MESSAGES.CANNOT_PROCESS_PAYMENT_CANCELLED);
-    }
-    if (order.payment_status === 'paid') {
-      throw ApiError.badRequest(PAYMENT_ERROR_MESSAGES.ORDER_ALREADY_PAID);
-    }
-  
-    const remainingBalance = Number(order.total_amount) - Number(order.paid_amount);
-  
-    if (paymentData.amount <= 0) {
-      throw ApiError.badRequest(PAYMENT_ERROR_MESSAGES.INVALID_PAYMENT_AMOUNT);
-    }
-    if (paymentData.amount > remainingBalance) {
-      throw ApiError.badRequest(
-        `Payment amount (${paymentData.amount}) exceeds remaining balance (${remainingBalance})`
+    // Everything runs in ONE transaction with the order row locked:
+    // two cashiers tapping "pay" at the same time can no longer both pass
+    // the balance check and double-charge the customer.
+    return transaction(async (client) => {
+      const { rows } = await client.query(
+        `SELECT * FROM orders WHERE id = $1 FOR UPDATE`,
+        [orderId]
       );
-    }
-  
-    // ── CREDIT PAYMENT BRANCH ──────────────────────────────────────────
-    if (paymentData.payment_method === 'credit') {
-      const creditCustomerId = paymentData.credit_customer_id ?? order.credit_customer_id;
-  
-      if (!creditCustomerId) {
+      const order = rows[0];
+      if (!order) throw ApiError.notFound(PAYMENT_ERROR_MESSAGES.ORDER_NOT_FOUND);
+
+      if (order.status === 'cancelled') {
+        throw ApiError.badRequest(PAYMENT_ERROR_MESSAGES.CANNOT_PROCESS_PAYMENT_CANCELLED);
+      }
+      if (order.payment_status === 'paid') {
+        throw ApiError.badRequest(PAYMENT_ERROR_MESSAGES.ORDER_ALREADY_PAID);
+      }
+
+      const remainingPaisa = this.toPaisa(order.total_amount) - this.toPaisa(order.paid_amount);
+      const amountPaisa = this.toPaisa(paymentData.amount);
+
+      if (amountPaisa <= 0) {
+        throw ApiError.badRequest(PAYMENT_ERROR_MESSAGES.INVALID_PAYMENT_AMOUNT);
+      }
+      if (amountPaisa > remainingPaisa) {
         throw ApiError.badRequest(
-          'credit_customer_id is required for credit payments.'
+          `Payment amount (${paymentData.amount}) exceeds remaining balance (${(remainingPaisa / 100).toFixed(2)})`
         );
       }
-  
-      const creditCustomer = await CreditCustomerModel.findById(creditCustomerId);
-      if (!creditCustomer) throw ApiError.notFound('Credit customer not found');
-      if (creditCustomer.status !== 'active') {
-        throw ApiError.badRequest(`Credit account is ${creditCustomer.status}.`);
-      }
-  
-      // Cast to number — DECIMAL comes back as string from pg
-      const availableCredit = Number(creditCustomer.available_credit);
-      const currentBalance = Number(creditCustomer.current_balance);
-  
-      console.log('availableCredit:', availableCredit, 'amount:', paymentData.amount);
-  
-      if (paymentData.amount > availableCredit) {
-        throw ApiError.badRequest(
-          `Amount (${paymentData.amount}) exceeds available credit (${availableCredit})`
+
+      // ── CREDIT PAYMENT BRANCH ──────────────────────────────────────
+      if (paymentData.payment_method === 'credit') {
+        const creditCustomerId = paymentData.credit_customer_id ?? order.credit_customer_id;
+
+        if (!creditCustomerId) {
+          throw ApiError.badRequest(
+            'credit_customer_id is required for credit payments.'
+          );
+        }
+
+        // Lock the credit account: concurrent charges can't overshoot the limit
+        const ccRes = await client.query(
+          `SELECT * FROM credit_customers WHERE id = $1 FOR UPDATE`,
+          [creditCustomerId]
         );
+        const creditCustomer = ccRes.rows[0];
+        if (!creditCustomer) throw ApiError.notFound('Credit customer not found');
+        if (creditCustomer.status !== 'active') {
+          throw ApiError.badRequest(`Credit account is ${creditCustomer.status}.`);
+        }
+
+        const availablePaisa = this.toPaisa(creditCustomer.available_credit);
+        if (amountPaisa > availablePaisa) {
+          throw ApiError.badRequest(
+            `Amount (${paymentData.amount}) exceeds available credit (${creditCustomer.available_credit})`
+          );
+        }
+
+        // Link credit customer to order
+        if (!order.credit_customer_id) {
+          await client.query(
+            `UPDATE orders SET credit_customer_id = $1, updated_at = NOW() WHERE id = $2`,
+            [creditCustomerId, orderId]
+          );
+        }
+
+        // Create credit transaction → DB trigger updates current_balance
+        const currentBalance = Number(creditCustomer.current_balance);
+        await CreditTransactionModel.create({
+          credit_customer_id: creditCustomerId,
+          order_id: orderId,
+          transaction_type: 'charge',
+          amount: paymentData.amount,
+          balance_before: currentBalance,
+          balance_after: currentBalance + paymentData.amount,
+          due_date: calculateDueDate(creditCustomer.payment_terms_days).toISOString(),
+          notes: paymentData.notes ?? undefined,
+          created_by: paymentData.processed_by,
+        }, client);
+
+        paymentData.credit_customer_id = creditCustomerId;
       }
-  
-      // Link credit customer to order
-      if (!order.credit_customer_id) {
-        await OrderModel.updateCreditCustomer(orderId, creditCustomerId);
+      // ── END CREDIT BRANCH ──────────────────────────────────────────
+
+      // Creates order_payments record → DB trigger updates order.paid_amount + payment_status.
+      // The UNIQUE index on (order_id, transaction_id) makes retries safe:
+      // a double-submitted gateway callback becomes a 409, not a double charge.
+      let payment;
+      try {
+        payment = await PaymentModel.createPayment({
+          order_id: orderId,
+          ...paymentData,
+          status: 'completed',
+        }, client);
+      } catch (err: any) {
+        if (err?.code === '23505') {
+          throw ApiError.conflict(
+            'Duplicate payment: a payment with this transaction ID was already recorded for this order'
+          );
+        }
+        throw err;
       }
-  
-      // Create credit transaction → DB trigger updates current_balance
-      const creditTx = await CreditTransactionModel.create({
-        credit_customer_id: creditCustomerId,
-        order_id: orderId,
-        transaction_type: 'charge',
-        amount: paymentData.amount,
-        balance_before: currentBalance,
-        balance_after: currentBalance + paymentData.amount,
-        due_date: calculateDueDate(creditCustomer.payment_terms_days).toISOString(),
-        notes: paymentData.notes ?? undefined,
-        created_by: paymentData.processed_by,
-      });
-  
-      console.log('Credit transaction created:', creditTx);
-  
-      paymentData.credit_customer_id = creditCustomerId;
-    }
-    // ── END CREDIT BRANCH ──────────────────────────────────────────────
-  
-    // Creates order_payments record → DB trigger updates order.paid_amount + payment_status
-    const payment = await PaymentModel.createPayment({
-      order_id: orderId,
-      ...paymentData,
-      status: 'completed',
+
+      const updatedOrder = (
+        await client.query(`SELECT * FROM orders WHERE id = $1`, [orderId])
+      ).rows[0];
+      if (!updatedOrder) throw ApiError.notFound(PAYMENT_ERROR_MESSAGES.ORDER_NOT_FOUND);
+
+      return {
+        payment,
+        order: {
+          id: updatedOrder.id,
+          order_number: updatedOrder.order_number,
+          total_amount: updatedOrder.total_amount,
+          paid_amount: updatedOrder.paid_amount,
+          balance_amount: updatedOrder.balance_amount,
+          payment_status: updatedOrder.payment_status,
+          previous_payment_status: order.payment_status,
+          credit_customer_id: updatedOrder.credit_customer_id ?? null,
+        },
+        message: this.getPaymentStatusMessage(
+          order.payment_status,
+          updatedOrder.payment_status,
+          updatedOrder.balance_amount
+        ),
+      };
     });
-  
-    const updatedOrder = await OrderModel.findById(orderId);
-    if (!updatedOrder) throw ApiError.notFound(PAYMENT_ERROR_MESSAGES.ORDER_NOT_FOUND);
-  
-    return {
-      payment,
-      order: {
-        id: updatedOrder.id,
-        order_number: updatedOrder.order_number,
-        total_amount: updatedOrder.total_amount,
-        paid_amount: updatedOrder.paid_amount,
-        balance_amount: updatedOrder.balance_amount,
-        payment_status: updatedOrder.payment_status,
-        previous_payment_status: order.payment_status,
-        credit_customer_id: updatedOrder.credit_customer_id ?? null,
-      },
-      message: this.getPaymentStatusMessage(
-        order.payment_status,
-        updatedOrder.payment_status,
-        updatedOrder.balance_amount
-      ),
-    };
   }
 
 
@@ -239,68 +270,114 @@ export class PaymentService {
     paymentId: string,
     refundData: RefundData
   ) {
-    // 1. Verify order exists
-    const order = await OrderModel.findById(orderId);
-    if (!order) {
-      throw ApiError.notFound(PAYMENT_ERROR_MESSAGES.ORDER_NOT_FOUND);
-    }
-  
-    // 2. Verify payment exists and belongs to order
-    const payment = await PaymentModel.findById(paymentId);
-    if (!payment || payment.order_id !== orderId) {
-      throw ApiError.conflict(PAYMENT_ERROR_MESSAGES.PAYMENT_NOT_FOUND);
-    }
-  
-    // 3. Validate refund amount doesn't exceed original payment
-    const paymentAmount = parseFloat(payment.amount.toString());
-    if (refundData.refund_amount > paymentAmount) {
-      throw ApiError.conflict(PAYMENT_ERROR_MESSAGES.REFUND_EXCEEDS_PAYMENT);
-    }
-  
-    // 4. Check cumulative refunds don't exceed original payment amount
-    const existingRefunds = await PaymentModel.findRefundsByPaymentId(paymentId);
-    const totalRefunded = existingRefunds.reduce(
-      (sum, r) => sum + parseFloat(r.refund_amount.toString()),
-      0
-    );
-  
-    if (totalRefunded + refundData.refund_amount > paymentAmount) {
-      throw ApiError.conflict(PAYMENT_ERROR_MESSAGES.REFUND_EXCEEDS_AVAILABLE);
-    }
-  
-    // 5. Create refund record
-    const refund = await PaymentModel.createRefund({
-      order_id: orderId,
-      payment_id: paymentId,
-      refund_method: payment.payment_method,
-      ...refundData,
+    // Locked single transaction: concurrent refunds can no longer race the
+    // cumulative cap, and the credit ledger is reversed in the same commit.
+    return transaction(async (client) => {
+      // 1. Verify order exists (locked)
+      const orderRes = await client.query(
+        `SELECT * FROM orders WHERE id = $1 FOR UPDATE`,
+        [orderId]
+      );
+      const order = orderRes.rows[0];
+      if (!order) {
+        throw ApiError.notFound(PAYMENT_ERROR_MESSAGES.ORDER_NOT_FOUND);
+      }
+
+      // 2. Verify payment exists and belongs to order (locked)
+      const payRes = await client.query(
+        `SELECT * FROM order_payments WHERE id = $1 FOR UPDATE`,
+        [paymentId]
+      );
+      const payment = payRes.rows[0];
+      if (!payment || payment.order_id !== orderId) {
+        throw ApiError.conflict(PAYMENT_ERROR_MESSAGES.PAYMENT_NOT_FOUND);
+      }
+
+      // 3. Only completed payments hold money — failed/pending ones have
+      //    nothing to give back and must not create refund records.
+      if (payment.status !== 'completed') {
+        throw ApiError.badRequest(
+          `Only completed payments can be refunded (current status: ${payment.status})`
+        );
+      }
+
+      // 4. Validate refund amount doesn't exceed original payment (paisa math)
+      const paymentPaisa = this.toPaisa(payment.amount);
+      const refundPaisa = this.toPaisa(refundData.refund_amount);
+      if (refundPaisa <= 0 || refundPaisa > paymentPaisa) {
+        throw ApiError.conflict(PAYMENT_ERROR_MESSAGES.REFUND_EXCEEDS_PAYMENT);
+      }
+
+      // 5. Check cumulative refunds don't exceed original payment amount
+      const existingRefunds = await PaymentModel.findRefundsByPaymentId(paymentId, client);
+      const totalRefundedPaisa = existingRefunds.reduce(
+        (sum, r) => sum + this.toPaisa(r.refund_amount),
+        0
+      );
+
+      if (totalRefundedPaisa + refundPaisa > paymentPaisa) {
+        throw ApiError.conflict(PAYMENT_ERROR_MESSAGES.REFUND_EXCEEDS_AVAILABLE);
+      }
+
+      // 6. Create refund record
+      const refund = await PaymentModel.createRefund({
+        order_id: orderId,
+        payment_id: paymentId,
+        refund_method: payment.payment_method,
+        ...refundData,
+      }, client);
+
+      // 7. Credit payments: reverse the charge on the customer's ledger so
+      //    the refunded amount becomes available credit again.
+      //    (credit_customer_id lives on the order, not on order_payments.)
+      if (payment.payment_method === 'credit' && order.credit_customer_id) {
+        const ccRes = await client.query(
+          `SELECT * FROM credit_customers WHERE id = $1 FOR UPDATE`,
+          [order.credit_customer_id]
+        );
+        const cc = ccRes.rows[0];
+        if (cc && cc.status === 'active') {
+          await CreditTransactionModel.create({
+            credit_customer_id: order.credit_customer_id,
+            order_id: orderId,
+            transaction_type: 'payment',
+            amount: refundData.refund_amount,
+            balance_before: Number(cc.current_balance),
+            balance_after: Number(cc.current_balance) - refundData.refund_amount,
+            notes: `Refund of payment ${paymentId}: ${refundData.reason}`,
+            created_by: refundData.refunded_by,
+          }, client);
+        }
+      }
+
+      // 8. Update payment status if fully refunded
+      const newTotalRefundedPaisa = totalRefundedPaisa + refundPaisa;
+      if (newTotalRefundedPaisa >= paymentPaisa) {
+        await PaymentModel.updatePaymentStatus(paymentId, "refunded", client);
+      }
+
+      // 9. Recalculate order payment status
+      await PaymentModel.recalculateOrderPaymentStatus(orderId, client);
+
+      // 10. Get updated order
+      const updatedOrder = (
+        await client.query(`SELECT * FROM orders WHERE id = $1`, [orderId])
+      ).rows[0];
+      if (!updatedOrder) {
+        throw ApiError.notFound(PAYMENT_ERROR_MESSAGES.ORDER_NOT_FOUND);
+      }
+
+      return {
+        refund,
+        order: {
+          id: updatedOrder.id,
+          order_number: updatedOrder.order_number,
+          payment_status: updatedOrder.payment_status,
+          paid_amount: updatedOrder.paid_amount,
+          balance_amount: updatedOrder.balance_amount,
+        },
+      };
     });
-  
-    // 6. Update payment status if fully refunded
-    const newTotalRefunded = totalRefunded + refundData.refund_amount;
-    if (newTotalRefunded >= paymentAmount) {
-      await PaymentModel.updatePaymentStatus(paymentId, "refunded");
-    }
-  
-    // 7. Recalculate order payment status
-    await PaymentModel.recalculateOrderPaymentStatus(orderId);
-  
-    // 8. Get updated order
-    const updatedOrder = await OrderModel.findById(orderId);
-    if (!updatedOrder) {
-      throw ApiError.notFound(PAYMENT_ERROR_MESSAGES.ORDER_NOT_FOUND);
-    }
-  
-    return {
-      refund,
-      order: {
-        id: updatedOrder.id,
-        order_number: updatedOrder.order_number,
-        payment_status: updatedOrder.payment_status,
-        paid_amount: updatedOrder.paid_amount,
-        balance_amount: updatedOrder.balance_amount,
-      },
-    };
   }
 
   /**

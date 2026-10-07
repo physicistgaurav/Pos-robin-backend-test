@@ -152,8 +152,12 @@ export class InvoiceService {
         : null;
 
       // 6. Create invoice
-      const invoice = await InvoiceModel.create({
-        order_id: data.order_id,
+      // The UNIQUE index on invoice_records(order_id) is the atomic guard
+      // against double-invoice races; map the violation to a clean 409.
+      let invoice;
+      try {
+        invoice = await InvoiceModel.create({
+          order_id: data.order_id,
         credit_customer_id: null,
         invoice_type: data.invoice_type || "tax_invoice",
         due_date: dueDate ? new Date(dueDate) : null,
@@ -174,6 +178,12 @@ export class InvoiceService {
         notes: data.notes,
         created_by: data.created_by,
       });
+      } catch (err: any) {
+        if (err?.code === "23505") {
+          throw ApiError.conflict(INVOICE_ERROR_MESSAGES.INVOICE_ALREADY_EXISTS);
+        }
+        throw err;
+      }
 
       // 8. Get full invoice details
       return this.getInvoiceById(invoice.id);
