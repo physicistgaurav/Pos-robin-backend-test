@@ -1,0 +1,272 @@
+Order Management
+
+
+DOne
+POST /api/orders - Create new order
+GET /api/orders - Get all orders (with filters)
+GET /api/orders/:orderId - Get order details with items
+PATCH /api/orders/:orderId/status - Update order status
+
+Order Items
+POST /api/orders/:orderId/items - Add items to order
+DELETE /api/orders/items/:itemId - Remove item
+PATCH /api/orders/items/:itemId/status - Update item status (kitchen)
+
+
+
+pending
+GET /api/orders/active - Get active orders
+GET /api/orders/kitchen - Kitchen display system 
+
+Payments (Bill Splitting)
+
+POST /api/orders/:orderId/payments - Add payment
+GET /api/orders/:orderId/payments - Get all payments for order
+
+Discounts
+
+POST /api/orders/:orderId/discount - Apply discount
+
+Reports
+
+GET /api/orders/reports/daily-sales - Daily sales summary
+GET /api/orders/reports/payment-summary - Payment method breakdown
+
+✨ Key Features
+
+Automatic Calculations (via DB triggers)
+
+Order totals (subtotal, tax, service charge)
+Payment status (unpaid/partial/paid)
+Table occupancy
+Timestamps for status changes
+
+
+Bill Splitting
+
+Split payment across multiple methods
+Automatic payment status updates
+Track transaction IDs
+
+
+# 🔥 MUST-HAVE ORDER APIs (POS)
+
+
+
+## 2️⃣ Payment APIs (Critical)
+
+### 💳 Add Payment
+
+```http
+POST /orders/:id/payments
+```
+
+Handles:
+
+* Partial payments
+* Multiple methods
+* Triggers payment_status update
+
+---
+
+### 🔄 Refund Payment
+
+```http
+POST /orders/:id/refunds
+```
+
+Handles:
+
+* Partial refunds
+* Payment reversal logic
+* Audit trail
+
+---
+
+### 🧾 Get Payments for Order
+
+```http
+GET /orders/:id/payments
+```
+
+---
+
+
+
+
+### 🔁 Bulk Item Update (Kitchen)
+
+```http
+PATCH /orders/:id/items/status
+```
+
+Example:
+
+```json
+{
+  "item_ids": ["uuid1", "uuid2"],
+  "status": "preparing"
+}
+```
+
+---
+
+## 4️⃣ Kitchen Display System (KDS) APIs
+
+### 🍳 Kitchen Queue
+
+```http
+GET /orders/kitchen
+```
+
+Returns:
+
+* Active orders
+* Items grouped by status
+* Time elapsed
+
+---
+
+### ⏱️ Mark Item Ready
+
+```http
+POST /orders/items/:itemId/ready
+```
+
+---
+
+### 🚨 Delayed Orders
+
+```http
+GET /orders/delayed?minutes=20
+```
+
+---
+
+## 5️⃣ Table & Floor APIs
+
+### 🔄 Move Table
+
+```http
+POST /orders/:id/change-table
+```
+
+Payload:
+
+```json
+{
+  "table_id": "new-table-uuid"
+}
+```
+
+---
+
+### 🔗 Merge Orders
+
+```http
+POST /orders/merge
+```
+
+Used when:
+
+* Guests change tables
+* Split/merge bills
+
+---
+
+### ✂️ Split Order
+
+```http
+POST /orders/:id/split
+```
+
+---
+
+## 6️⃣ Reporting & Admin APIs
+
+### 📊 Order Summary
+
+```http
+GET /orders/summary?date=2025-01-01
+```
+
+---
+
+### 🧮 Sales Report
+
+```http
+GET /orders/reports/sales
+```
+
+---
+
+### 🧾 Discount Usage
+
+```http
+GET /orders/reports/discounts
+```
+
+---
+
+## 7️⃣ Performance / UX APIs
+
+### 🔍 Search Orders
+
+```http
+GET /orders/search?q=ORD-20250101
+```
+
+---
+
+### ⚡ Active Orders (Fast)
+
+```http
+GET /orders/active
+```
+
+Uses:
+
+```sql
+active_orders_view
+```
+
+---
+
+### 🧠 Order Status Counts
+
+```http
+GET /orders/status-counts
+```
+
+Used for:
+
+* POS dashboard badges
+
+---
+
+
+## 🧩 Recommended Route Structure
+
+```txt
+/orders
+├── GET /  done
+├── GET /:id  done
+├── POST /  done
+├── PUT /:id  done
+├── POST /:id/cancel  done
+├── POST /:id/confirm
+├── POST /:id/serve  done
+├── POST /:id/complete  done
+├── GET /active  done
+├── GET /kitchen  done
+├── POST /:id/items   done
+├── PUT /:id/items/:itemId  done
+├── DELETE /:id/items/:itemId  done
+├── PATCH /:id/items/status  done
+├── POST /:id/payments  done
+├── POST /:id/refunds  done
+├── GET /:id/payments  done
+```
+
+
+test

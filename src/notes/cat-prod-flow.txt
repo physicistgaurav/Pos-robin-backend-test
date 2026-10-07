@@ -1,0 +1,98 @@
+How your menu is controlled (important)
+
+Your menu hierarchy is driven ONLY by categories, not products.
+
+categories.type = 'main' → Top-level menu sections
+
+categories.type = 'sub' → Clickable POS menu groups
+
+products.category_id → ALWAYS points to a sub category
+
+So yes — main & sub categories fully control the menu flow.
+
+
+Top-level POS Menu (Main Categories)
+
+These appear as tabs / sections in POS:
+
+main categories
+
+☕ Cafe
+🍽️ Restaurant
+🥤 Drinks
+🍰 Desserts
+
+DB Records
+Cafe        → type=main, parent_id=null
+Restaurant  → type=main, parent_id=null
+Drinks      → type=main, parent_id=null
+Desserts    → type=main, parent_id=null
+
+main category Cafe has 4 sub-categories
+
+Cafe
+ ├── Momos
+ ├── Burgers
+ ├── Pizzas
+ └── Noodles
+
+Restaurant
+ ├── Starters
+ ├── Main Course
+ ├── Chinese
+ └── Indian
+
+ Drinks
+ ├── Hot Beverages
+ ├── Cold Beverages
+ └── Alcoholic
+
+Momos      → type=sub, parent_id=Cafe
+Pizzas     → type=sub, parent_id=Cafe
+Chinese    → type=sub, parent_id=Restaurant
+Hot Drinks → type=sub, parent_id=Drinks
+
+Cafe
+ ├── Momos
+ │    ├── Chicken Momo
+ │    ├── Veg Momo
+ │    └── Paneer Momo
+ │
+ ├── Pizzas
+ │    ├── Mushroom Pizza
+ │    ├── Chicken Pizza
+ │    └── Margherita Pizza
+ │
+ ├── Burgers
+ │    ├── Veg Burger
+ │    └── Chicken Burger
+ │
+ └── Noodles
+      ├── Veg Noodles
+      └── Keema Noodles
+
+
+Where products like momo, pizza, burger go
+IMPORTANT RULE
+
+Products NEVER belong to main category
+Products ALWAYS belong to sub category
+
+Product	category_id
+Chicken Momo	Momos (sub)
+Veg Momo	Momos (sub)
+Paneer Momo	Momos (sub)
+
+
+. How POS menu renders (real flow)
+POS Screen Logic
+
+Load main categories
+
+User clicks Cafe
+
+Load sub categories under Cafe
+
+User clicks Momos
+
+Load products where category_id = Momos

@@ -1,0 +1,2 @@
+ALTER TABLE orders 
+ALTER COLUMN tax_percentage SET DEFAULT 0;

@@ -1,0 +1,218 @@
+export enum OrderType {
+  DINE_IN = 'dine_in',
+  TAKEAWAY = 'takeaway',
+  DELIVERY = 'delivery',
+  ONLINE = 'online'
+}
+
+export type OrderStatus =
+  | 'pending'
+  | 'confirmed'
+  | 'preparing'
+  | 'ready'
+  | 'served'
+  | 'completed'
+  | 'cancelled';
+
+  export type OrderItemStatus = 'pending' | 'confirmed' | 'preparing' | 'ready' | 'completed';
+
+export const ALLOWABLE_STATUSES_FOR_ADDING_ITEMS: OrderStatus[] = [
+  'pending',
+  'confirmed',
+  'preparing',
+];
+
+
+
+export const STATUSES_TO_REVERT_ON_ADD_ITEMS: Partial<Record<OrderStatus, OrderStatus>> = {
+  completed: 'pending', // completed → revert back to pending
+};
+
+export enum PaymentMethod {
+  CASH = 'cash',
+  CREDIT = 'credit',
+  DEBIT_CARD = 'debit_card',
+  ONLINE = 'online',
+  CONNECT_IPS = 'connectIPS',
+  ESEWA = 'esewa',
+  KHALTI = 'khalti',
+  FONEPAY = 'fonepay'
+}
+
+export enum PaymentStatus {
+  UNPAID = 'unpaid',
+  PARTIAL = 'partial',
+  PAID = 'paid',
+  REFUNDED = 'refunded'
+}
+
+export const BLOCKED_PAYMENT_STATUSES_FOR_ADDING_ITEMS: PaymentStatus[] = [PaymentStatus.PAID];
+
+export enum DiscountType {
+  PERCENTAGE = 'percentage',
+  FIXED = 'fixed',
+  COUPON = 'coupon'
+}
+
+export interface CreateOrderDTO {
+  order_type: OrderType;
+  table_id?: string; // UUID
+  customer_name?: string;
+  customer_phone?: string;
+  customer_email?: string;
+  delivery_address?: string;
+  delivery_instructions?: string;
+  special_instructions?: string;
+  kitchen_notes?: string;
+  tax_percentage?: number;
+  service_charge_percentage?: number;
+}
+
+export interface CreateOrderItemDTO {
+  product_id: string;
+  quantity: number;
+  variant_name?: string;
+  customizations?: string;
+  special_instructions?: string;
+}
+
+export interface OrderItemWithSnapshot extends CreateOrderItemDTO {
+  id?: string;
+  order_id?: string;
+  product_name: string;
+  product_price: number;
+  unit_price: number;
+  total_price: number;
+  item_status?: OrderItemStatus;
+}
+
+export interface OrderItemSnapshot {
+  id: string;
+  order_id: string;
+  product_id: string;
+  product_name: string;
+  product_price: number;
+  unit_price: number;
+  quantity: number;
+  total_price: number;
+  variant_name: string | null;
+  customizations: string | null;
+  special_instructions: string | null;
+  item_status: OrderItemStatus;
+}
+
+export interface CreateOrderRequestDTO {
+  order: CreateOrderDTO;
+  items: CreateOrderItemDTO[];
+}
+
+export interface UpdateOrderDTO {
+  status?: 'pending' | 'confirmed' | 'preparing' | 'ready' | 'served' | 'completed' | 'cancelled';
+
+  order_type?: 'dine_in' | 'takeaway' | 'delivery' | 'online';
+
+  payment_status?: 'unpaid' | 'partial' | 'paid' | 'refunded';
+
+  table_id?: string | null;
+  served_by?: string | null;
+
+  customer_name?: string;
+  customer_phone?: string;
+  customer_email?: string;
+
+  delivery_address?: string;
+  delivery_instructions?: string;
+
+  special_instructions?: string;
+  kitchen_notes?: string;
+
+  estimated_prep_time?: number;
+  estimated_delivery_time?: Date;
+
+  cancellation_reason?: string;
+}
+
+
+// export interface AddOrderItemDTO {
+//   product_id: string;
+//   quantity: number;
+//   variant_name?: string;
+//   customizations?: string;
+//   special_instructions?: string;
+// }
+
+// export interface UpdateOrderStatusDTO {
+//   status: OrderStatus;
+//   cancellation_reason?: string;
+// }
+
+// export interface ApplyDiscountDTO {
+//   discount_type: DiscountType;
+//   discount_value: number;
+//   discount_reason?: string;
+// }
+
+export interface AddPaymentDTO {
+  payment_method: PaymentMethod;
+  amount: number;
+  transaction_id?: string;
+  reference_number?: string;
+  card_last_4_digits?: string;
+  payment_gateway?: string;
+  notes?: string;
+}
+
+
+export interface Order {
+  id: string;
+  order_number: string;
+  order_type: OrderType;
+  table_id?: string;
+  table_name?: string;
+  location?: string;
+  customer_name?: string;
+  customer_phone?: string;
+  full_name?: string;
+  delivery_address?: string;
+  status: OrderStatus;
+  subtotal: number;
+  discount_amount: number;
+  discount_type?: DiscountType;
+  discount_value?: number;
+  discount_reason?: string;
+  tax_amount: number;
+  service_charge_amount: number;
+  total_amount: number;
+  payment_status: PaymentStatus;
+  paid_amount: number;
+  balance_amount: number;
+  order_time: Date;
+  created_by: string;
+  order_items?: OrderItem[];
+  credit_customer_id?: string;
+  // ... other fields
+}
+
+export interface OrderItem {
+  id: string;
+  order_id: string;
+  product_id: string;
+  product_name: string;
+  product_price: number;
+  quantity: number;
+  unit_price: number;
+  total_price: number;
+  item_status: OrderItemStatus;
+  special_instructions?: string;
+  customizations?: string;
+}
+
+export interface OrderPayment {
+  id: string;
+  order_id: string;
+  payment_method: PaymentMethod;
+  amount: number;
+  transaction_id?: string;
+  status: string;
+  payment_date: Date;
+}

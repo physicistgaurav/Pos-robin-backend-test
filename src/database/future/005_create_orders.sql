@@ -1,0 +1,33 @@
+-- -- ==================== src/database/migrations/004_create_orders.sql ====================
+-- -- Migration: Create orders table
+-- -- Created: 2024-01-01
+
+-- CREATE TABLE IF NOT EXISTS orders (
+--   id SERIAL PRIMARY KEY,
+--   order_number VARCHAR(50) UNIQUE NOT NULL,
+--   table_id INTEGER REFERENCES tables(id) ON DELETE SET NULL,
+--   waiter_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+--   status VARCHAR(20) DEFAULT 'pending',
+--   total_amount DECIMAL(10, 2) NOT NULL DEFAULT 0,
+--   discount_amount DECIMAL(10, 2) DEFAULT 0,
+--   tax_amount DECIMAL(10, 2) DEFAULT 0,
+--   final_amount DECIMAL(10, 2) NOT NULL DEFAULT 0,
+--   payment_method VARCHAR(50),
+--   payment_status VARCHAR(20) DEFAULT 'pending',
+--   notes TEXT,
+--   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+--   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+--   completed_at TIMESTAMP,
+  
+--   CONSTRAINT orders_status_check CHECK (status IN ('pending', 'preparing', 'ready', 'served', 'completed', 'cancelled')),
+--   CONSTRAINT orders_payment_status_check CHECK (payment_status IN ('pending', 'paid', 'partially_paid', 'refunded')),
+--   CONSTRAINT orders_payment_method_check CHECK (payment_method IS NULL OR payment_method IN ('cash', 'card', 'upi', 'wallet')),
+--   CONSTRAINT orders_amount_check CHECK (total_amount >= 0 AND discount_amount >= 0 AND tax_amount >= 0 AND final_amount >= 0)
+-- );
+
+-- CREATE INDEX idx_orders_table_id ON orders(table_id);
+-- CREATE INDEX idx_orders_waiter_id ON orders(waiter_id);
+-- CREATE INDEX idx_orders_status ON orders(status);
+-- CREATE INDEX idx_orders_payment_status ON orders(payment_status);
+-- CREATE INDEX idx_orders_created_at ON orders(created_at DESC);
+-- CREATE INDEX idx_orders_order_number ON orders(order_number);

@@ -1,0 +1,62 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: always
+    ports:
+      - "${PORT}:${PORT}"
+    env_file:
+      - .env
+    #comment for when railway, uncomment if for local 
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - app-network-bistro
+  #comment for when railway, uncomment if for local   
+  db:
+    image: postgres:14-alpine
+    restart: always
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
+    volumes:
+      - postgres-data-bistro:/var/lib/postgresql/data
+    ports:
+      - "5433:5432"
+    networks:
+      - app-network-bistro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backup:
+    image: postgres:14-alpine
+    restart: always
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: ${DB_PASSWORD}
+    volumes:
+      - ./backups:/backups
+    networks:
+      - app-network-bistro
+    entrypoint: >
+      sh -c "while true; do
+        pg_dump -h db -U ${DB_USER} -d ${DB_NAME} -F c -f /backups/backup_$$(date +%Y%m%d_%H%M%S).dump &&
+        echo 'Backup completed' &&
+        find /backups -name '*.dump' -mtime +7 -delete &&
+        sleep 86400;
+      done"
+      
+networks:
+  app-network-bistro:
+    driver: bridge
+
+volumes:
+  postgres-data-bistro:

@@ -1,0 +1,203 @@
+In Express:
+
+req.ip
+
+
+If behind proxy (very common):
+
+app.set("trust proxy", 1);
+req.ip
+
+⚠️ IP is not reliable for identity:
+
+Changes on mobile networks
+
+Changes with VPN, office Wi-Fi, ISP
+
+Multiple users can share same IP
+
+👉 Industry rule: IP ≠ device identity
+
+3️⃣ Industry best practice ✅
+Detect + Verify, not block
+Step-by-step flow used by banks / Google / Stripe:
+✅ On login:
+
+Capture:
+
+IP
+
+User-Agent
+
+Optional device fingerprint
+
+Compare with last known login
+
+🔍 If device looks new:
+
+Trigger OTP / email verification
+
+Example:
+
+“New login detected from Chrome on Windows, Delhi”
+
+🔐 After OTP success:
+
+Mark device as trusted
+
+Allow login
+
+Save device info
+
+4️⃣ How device recognition is usually done
+Minimum (recommended for you now)
+
+Store:
+
+last_login_ip
+
+last_user_agent
+
+Compare:
+
+if (ip changed OR user-agent changed) {
+  require OTP
+}
+
+1️⃣ What is User-Agent (simple)
+
+User-Agent is a string sent by the browser/app that tells the server:
+
+Browser name & version
+
+OS
+
+Device type
+
+Example:
+
+Mozilla/5.0 (Windows NT 10.0; Win64; x64)
+Chrome/121.0.0.0
+
+In Express:
+
+const userAgent = req.headers["user-agent"];
+
+
+📌 Used for: detecting new devices, security alerts, analytics
+📌 Not unique, but useful when combined with IP
+
+2️⃣ DB format (ONLY design, no integration now)
+User {
+  id: UUID
+  email: string
+  password_hash: string
+
+  last_login_ip: string | null
+  last_user_agent: string | null
+
+  otp_hash: string | null
+  otp_expires_at: Date | null
+}
+
+
+That’s enough for now ✅
+
+3️⃣ Mock OTP service (no DB, no SMS/email)
+// otp.service.ts
+import crypto from "crypto";
+
+export function generateOTP() {
+  return Math.floor(100000 + Math.random() * 900000).toString(); // 6-digit
+}
+
+export function hashOTP(otp: string) {
+  return crypto.createHash("sha256").update(otp).digest("hex");
+}
+
+
+import { Request, Response } from "express";
+import { generateOTP, hashOTP } from "./otp.service";
+
+let mockUser = {
+  email: "test@example.com",
+  password: "password123",
+  last_login_ip: null as string | null,
+  last_user_agent: null as string | null,
+  otp_hash: null as string | null,
+  otp_expires_at: null as Date | null,
+};
+
+export const login = (req: Request, res: Response) => {
+  const { email, password } = req.body;
+
+  const ip = req.ip;
+  const userAgent = req.headers["user-agent"];
+
+  // 1. Check credentials (mock)
+  if (email !== mockUser.email || password !== mockUser.password) {
+    return res.status(401).json({ message: "Invalid credentials" });
+  }
+
+  // 2. Detect new device
+  const isNewDevice =
+    mockUser.last_login_ip !== ip ||
+    mockUser.last_user_agent !== userAgent;
+
+  if (isNewDevice) {
+    const otp = generateOTP();
+
+    mockUser.otp_hash = hashOTP(otp);
+    mockUser.otp_expires_at = new Date(Date.now() + 5 * 60 * 1000); // 5 min
+
+    console.log("🔐 OTP sent (mock):", otp);
+
+    return res.json({
+      message: "New device detected. OTP required.",
+      otpRequired: true,
+    });
+  }
+
+  // 3. Normal login
+  mockUser.last_login_ip = ip!;
+  mockUser.last_user_agent = userAgent!;
+
+  return res.json({ message: "Login successful" });
+};
+
+
+export const verifyOtp = (req: Request, res: Response) => {
+  const { otp } = req.body;
+
+Was an OTP even issued? ==> / 1️⃣ No OTP was generated  “You can’t verify something that was never issued.”
+  if (!mockUser.otp_hash || !mockUser.otp_expires_at) {
+    return res.status(400).json({ message: "No OTP pending" });
+  }
+
+  if (mockUser.otp_expires_at < new Date()) {
+    return res.status(400).json({ message: "OTP expired" });
+  }
+
+  if (hashOTP(otp) !== mockUser.otp_hash) {
+    return res.status(401).json({ message: "Invalid OTP" });
+  }
+
+  // OTP verified → trust device
+  mockUser.last_login_ip = req.ip!;
+  mockUser.last_user_agent = req.headers["user-agent"]!;
+  mockUser.otp_hash = null;
+  mockUser.otp_expires_at = null;
+
+  return res.json({ message: "OTP verified. Login successful." });
+};
+
+7️⃣ Mental model (remember this)
+
+IP + User-Agent = device hint
+
+OTP only when something changes
+
+OTP is generated & hashed by backend
+
+Provider only delivers OTP
+

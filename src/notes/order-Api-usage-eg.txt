@@ -1,0 +1,515 @@
+// =====================================================
+// ORDER API USAGE EXAMPLES
+// =====================================================
+
+// =====================================================
+// 1. CREATE ORDER (Dine-in)
+// POST /api/orders
+// =====================================================
+const createDineInOrder = {
+  method: 'POST',
+  url: '/api/orders',
+  headers: {
+    'Authorization': 'Bearer YOUR_TOKEN',
+    'Content-Type': 'application/json'
+  },
+  body: {
+    order_type: 'dine_in',
+    table_id: '123e4567-e89b-12d3-a456-426614174001',
+    customer_name: 'John Doe',
+    tax_percentage: 13.00,
+    service_charge_percentage: 10.00,
+    special_instructions: 'Please serve hot'
+  }
+};
+
+// Response:
+// {
+//   "success": true,
+//   "message": "Order created successfully",
+//   "data": {
+//     "id": "order-uuid",
+//     "order_number": "ORD-20241222-0001",
+//     "order_type": "dine_in",
+//     "status": "pending",
+//     "subtotal": 0.00,
+//     "total_amount": 0.00,
+//     ...
+//   }
+// }
+
+// =====================================================
+// 2. ADD ITEMS TO ORDER
+// POST /api/orders/:orderId/items
+// =====================================================
+const addOrderItems = {
+  method: 'POST',
+  url: '/api/orders/order-uuid/items',
+  headers: {
+    'Authorization': 'Bearer YOUR_TOKEN',
+    'Content-Type': 'application/json'
+  },
+  body: {
+    items: [
+      {
+        product_id: 'product-momo-uuid',
+        quantity: 2,
+        special_instructions: 'Extra spicy'
+      },
+      {
+        product_id: 'product-chowmein-uuid',
+        quantity: 1,
+        customizations: 'No onions'
+      },
+      {
+        product_id: 'product-coke-uuid',
+        quantity: 2
+      }
+    ]
+  }
+};
+
+// Response:
+// {
+//   "success": true,
+//   "message": "Items added successfully",
+//   "data": [
+//     {
+//       "id": "item-1-uuid",
+//       "product_name": "Chicken Momo",
+//       "quantity": 2,
+//       "unit_price": 150.00,
+//       "total_price": 300.00
+//     },
+//     ...
+//   ]
+// }
+// 
+// NOTE: Order totals are automatically calculated by triggers!
+
+// =====================================================
+// 3. GET ORDER WITH ITEMS
+// GET /api/orders/:orderId
+// =====================================================
+const getOrder = {
+  method: 'GET',
+  url: '/api/orders/order-uuid',
+  headers: {
+    'Authorization': 'Bearer YOUR_TOKEN'
+  }
+};
+
+// Response:
+// {
+//   "success": true,
+//   "data": {
+//     "id": "order-uuid",
+//     "order_number": "ORD-20241222-0001",
+//     "order_type": "dine_in",
+//     "table_number": 5,
+//     "status": "pending",
+//     "subtotal": 640.00,      // Auto-calculated
+//     "tax_amount": 83.20,      // Auto-calculated (13%)
+//     "service_charge_amount": 64.00,  // Auto-calculated (10%)
+//     "total_amount": 787.20,   // Auto-calculated
+//     "payment_status": "unpaid",
+//     "paid_amount": 0.00,
+//     "balance_amount": 787.20,
+//     "items": [
+//       {
+//         "id": "item-1-uuid",
+//         "product_name": "Chicken Momo",
+//         "quantity": 2,
+//         "unit_price": 150.00,
+//         "total_price": 300.00,
+//         "item_status": "pending"
+//       },
+//       ...
+//     ]
+//   }
+// }
+
+// =====================================================
+// 4. UPDATE ORDER STATUS
+// PATCH /api/orders/:orderId/status
+// =====================================================
+const confirmOrder = {
+  method: 'PATCH',
+  url: '/api/orders/order-uuid/status',
+  headers: {
+    'Authorization': 'Bearer YOUR_TOKEN',
+    'Content-Type': 'application/json'
+  },
+  body: {
+    status: 'confirmed'
+  }
+};
+
+// Status flow: pending -> confirmed -> preparing -> ready -> served -> completed
+
+// =====================================================
+// 5. APPLY DISCOUNT
+// POST /api/orders/:orderId/discount
+// =====================================================
+
+// Percentage discount (10% off)
+const applyPercentageDiscount = {
+  method: 'POST',
+  url: '/api/orders/order-uuid/discount',
+  headers: {
+    'Authorization': 'Bearer YOUR_TOKEN',
+    'Content-Type': 'application/json'
+  },
+  body: {
+    discount_type: 'percentage',
+    discount_value: 10,
+    discount_reason: 'Loyalty customer'
+  }
+};
+
+// Fixed discount (Rs. 50 off)
+const applyFixedDiscount = {
+  method: 'POST',
+  url: '/api/orders/order-uuid/discount',
+  body: {
+    discount_type: 'fixed',
+    discount_value: 50,
+    discount_reason: 'Coupon code: SAVE50'
+  }
+};
+
+// Response:
+// {
+//   "success": true,
+//   "message": "Discount applied successfully",
+//   "data": {
+//     "subtotal": 640.00,
+//     "discount_amount": 64.00,     // Auto-calculated
+//     "tax_amount": 74.88,          // Recalculated on discounted amount
+//     "total_amount": 708.48,       // Recalculated
+//     ...
+//   }
+// }
+
+// =====================================================
+// 6. SPLIT BILL - ADD MULTIPLE PAYMENTS
+// POST /api/orders/:orderId/payments
+// =====================================================
+
+// Payment 1: Cash Rs. 400
+const addCashPayment = {
+  method: 'POST',
+  url: '/api/orders/order-uuid/payments',
+  headers: {
+    'Authorization': 'Bearer YOUR_TOKEN',
+    'Content-Type': 'application/json'
+  },
+  body: {
+    payment_method: 'cash',
+    amount: 400.00
+  }
+};
+
+// Response after first payment:
+// {
+//   "success": true,
+//   "message": "Payment added successfully",
+//   "data": {
+//     "payment": { ... },
+//     "order": {
+//       "payment_status": "partial",   // Auto-updated
+//       "paid_amount": 400.00,         // Auto-calculated
+//       "balance_amount": 387.20       // Auto-calculated
+//     }
+//   }
+// }
+
+// Payment 2: eSewa Rs. 300
+const addEsewaPayment = {
+  method: 'POST',
+  url: '/api/orders/order-uuid/payments',
+  body: {
+    payment_method: 'esewa',
+    amount: 300.00,
+    transaction_id: 'ESEWA-TXN-123456',
+    payment_gateway: 'esewa'
+  }
+};
+
+// Payment 3: Khalti Rs. 87.20 (remaining)
+const addKhaltiPayment = {
+  method: 'POST',
+  url: '/api/orders/order-uuid/payments',
+  body: {
+    payment_method: 'khalti',
+    amount: 87.20,
+    transaction_id: 'KHALTI-TXN-789012'
+  }
+};
+
+// Response after final payment:
+// {
+//   "data": {
+//     "order": {
+//       "payment_status": "paid",      // Auto-updated to 'paid'!
+//       "paid_amount": 787.20,         // Fully paid
+//       "balance_amount": 0.00         // No balance
+//     }
+//   }
+// }
+
+// =====================================================
+// 7. GET ORDER PAYMENTS (View split bill)
+// GET /api/orders/:orderId/payments
+// =====================================================
+const getOrderPayments = {
+  method: 'GET',
+  url: '/api/orders/order-uuid/payments',
+  headers: {
+    'Authorization': 'Bearer YOUR_TOKEN'
+  }
+};
+
+// Response:
+// {
+//   "success": true,
+//   "data": [
+//     {
+//       "payment_method": "cash",
+//       "amount": 400.00,
+//       "payment_date": "2024-12-22T10:30:00Z",
+//       "processed_by_name": "John Cashier"
+//     },
+//     {
+//       "payment_method": "esewa",
+//       "amount": 300.00,
+//       "transaction_id": "ESEWA-TXN-123456",
+//       "payment_date": "2024-12-22T10:31:00Z"
+//     },
+//     {
+//       "payment_method": "khalti",
+//       "amount": 87.20,
+//       "transaction_id": "KHALTI-TXN-789012",
+//       "payment_date": "2024-12-22T10:31:30Z"
+//     }
+//   ]
+// }
+
+// =====================================================
+// 8. GET ALL ORDERS WITH FILTERS
+// GET /api/orders
+// =====================================================
+
+// Get today's orders
+const getTodaysOrders = {
+  method: 'GET',
+  url: '/api/orders?date=2024-12-22',
+  headers: {
+    'Authorization': 'Bearer YOUR_TOKEN'
+  }
+};
+
+// Get active orders
+const getActiveOrders = {
+  method: 'GET',
+  url: '/api/orders?status=pending&status=confirmed&status=preparing'
+};
+
+// Get unpaid orders
+const getUnpaidOrders = {
+  method: 'GET',
+  url: '/api/orders?payment_status=unpaid&payment_status=partial'
+};
+
+// Get orders for specific table
+const getTableOrders = {
+  method: 'GET',
+  url: '/api/orders?table_id=table-uuid'
+};
+
+// Pagination
+const getOrdersPaginated = {
+  method: 'GET',
+  url: '/api/orders?limit=20&offset=0'
+};
+
+// =====================================================
+// 9. KITCHEN DISPLAY SYSTEM
+// GET /api/orders/kitchen
+// =====================================================
+const getKitchenOrders = {
+  method: 'GET',
+  url: '/api/orders/kitchen',
+  headers: {
+    'Authorization': 'Bearer YOUR_TOKEN'
+  }
+};
+
+// Response:
+// {
+//   "success": true,
+//   "data": [
+//     {
+//       "order_number": "ORD-20241222-0001",
+//       "table_number": 5,
+//       "product_name": "Chicken Momo",
+//       "quantity": 2,
+//       "item_status": "pending",
+//       "special_instructions": "Extra spicy",
+//       "ordered_at": "2024-12-22T10:00:00Z",
+//       "minutes_waiting": 15
+//     },
+//     ...
+//   ]
+// }
+
+// Update item status in kitchen
+const updateKitchenItemStatus = {
+  method: 'PATCH',
+  url: '/api/orders/items/item-uuid/status',
+  body: {
+    status: 'preparing'  // or 'ready'
+  }
+};
+
+// =====================================================
+// 10. DELETE ORDER ITEM (Before order is confirmed)
+// DELETE /api/orders/items/:itemId
+// =====================================================
+const deleteOrderItem = {
+  method: 'DELETE',
+  url: '/api/orders/items/item-uuid',
+  headers: {
+    'Authorization': 'Bearer YOUR_TOKEN'
+  }
+};
+
+// Response:
+// {
+//   "success": true,
+//   "message": "Order item deleted successfully"
+// }
+// NOTE: Order totals are automatically recalculated!
+
+// =====================================================
+// 11. GET ACTIVE ORDERS VIEW
+// GET /api/orders/active
+// =====================================================
+const getActiveOrdersView = {
+  method: 'GET',
+  url: '/api/orders/active',
+  headers: {
+    'Authorization': 'Bearer YOUR_TOKEN'
+  }
+};
+
+// Response: All non-completed orders with summary
+
+// =====================================================
+// 12. DAILY SALES REPORT
+// GET /api/orders/reports/daily-sales
+// =====================================================
+const getDailySales = {
+  method: 'GET',
+  url: '/api/orders/reports/daily-sales?date=2024-12-22',
+  headers: {
+    'Authorization': 'Bearer YOUR_TOKEN'
+  }
+};
+
+// Response:
+// {
+//   "success": true,
+//   "data": {
+//     "sale_date": "2024-12-22",
+//     "total_orders": 45,
+//     "completed_orders": 42,
+//     "cancelled_orders": 3,
+//     "total_sales": 35420.00,
+//     "avg_order_value": 843.33,
+//     "total_discounts": 2150.00,
+//     "total_tax_collected": 4604.60
+//   }
+// }
+
+// =====================================================
+// 13. PAYMENT METHOD SUMMARY
+// GET /api/orders/reports/payment-summary
+// =====================================================
+const getPaymentSummary = {
+  method: 'GET',
+  url: '/api/orders/reports/payment-summary?date=2024-12-22',
+  headers: {
+    'Authorization': 'Bearer YOUR_TOKEN'
+  }
+};
+
+// Response:
+// {
+//   "success": true,
+//   "data": [
+//     {
+//       "payment_method": "cash",
+//       "transaction_count": 25,
+//       "total_amount": 15000.00
+//     },
+//     {
+//       "payment_method": "esewa",
+//       "transaction_count": 18,
+//       "total_amount": 12300.00
+//     },
+//     {
+//       "payment_method": "khalti",
+//       "transaction_count": 12,
+//       "total_amount": 8120.00
+//     }
+//   ]
+// }
+
+// =====================================================
+// COMPLETE WORKFLOW EXAMPLE
+// =====================================================
+
+async function completeOrderWorkflow() {
+  // 1. Create order
+  const order = await createOrder({
+    order_type: 'dine_in',
+    table_id: 'table-5-uuid',
+    customer_name: 'Rajesh Kumar'
+  });
+
+  const orderId = order.id;
+
+  // 2. Add items
+  await addItems(orderId, [
+    { product_id: 'momo-uuid', quantity: 2 },
+    { product_id: 'chowmein-uuid', quantity: 1 },
+    { product_id: 'coke-uuid', quantity: 2 }
+  ]);
+
+  // 3. Confirm order
+  await updateStatus(orderId, 'confirmed');
+
+  // 4. Kitchen updates
+  await updateStatus(orderId, 'preparing');
+  await updateStatus(orderId, 'ready');
+
+  // 5. Serve food
+  await updateStatus(orderId, 'served');
+
+  // 6. Apply discount (optional)
+  await applyDiscount(orderId, {
+    discount_type: 'percentage',
+    discount_value: 10
+  });
+
+  // 7. Split payment
+  await addPayment(orderId, { method: 'cash', amount: 400 });
+  await addPayment(orderId, { method: 'esewa', amount: 300 });
+  await addPayment(orderId, { method: 'khalti', amount: 87.20 });
+
+  // 8. Complete order
+  await updateStatus(orderId, 'completed');
+
+  console.log('Order completed successfully!');
+}

@@ -1,0 +1,23 @@
+export const AUTH_RESPONSE= {
+    REGISTRATION: "Registration successful",
+    LOGIN: "Login successful",
+    REFRESH_TOKEN: "Token refreshed successfully",
+    NO_REFRESH_TOKEN:"No refresh token provided",
+    LOGOUT: "User logged out successfully",
+    GET_PROFILE: "Profile fetched successfully",
+    GET_USERS:"Users fetched sucessfully",
+    UPDATE_USER:"User updated successfully",
+    DELETE_USER:"User deleted successfully",
+    NO_USER:"User not found",
+    CHANGE_PASSWORD:"User password changed successfully",
+    ROLES:"User roles fetched successfully",
+    INCORRECT_PASSWORD:"Current password is incorrect",
+    CHANGE_ROLE:"User role changed successfully",
+    RESET_PASSWORD:"User password reset successfully",
+    DEACTIVATED:"User deactivated successfully",
+    REACTIVATED:"User reactivated successfully",
+    ALREADY_EXISTS:"User with this email already exists",
+    INVALID_EMAIL_PSWD:"Invalid email or password from api",
+    DEACTIVATED_USER:"Your account has been deactivated",
+    CREATE_USER:"User created successfully"
+}
