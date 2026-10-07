@@ -1,7 +1,9 @@
+import { PoolClient } from 'pg';
 import { query } from '../config/database';
 import { Payment, Refund } from '../types/payment.types';
 
-
+// Executor can be the pool query or a transaction client
+type Executor = { query: (...args: any[]) => Promise<any> };
 
 export class PaymentModel {
   /**
@@ -18,7 +20,7 @@ export class PaymentModel {
     status: string;
     processed_by: string;
     notes?: string;
-  }): Promise<Payment> {
+  }, client?: PoolClient): Promise<Payment> {
     const sql = `
       INSERT INTO order_payments (
         order_id,
@@ -49,7 +51,8 @@ export class PaymentModel {
       data.notes || null,
     ];
 
-    const result = await query(sql, values);
+    const executor: Executor = client ?? { query };
+    const result = await executor.query(sql, values);
     return result.rows[0] as Payment;
   }
 
@@ -99,7 +102,7 @@ export class PaymentModel {
     reason: string;
     refunded_by: string;
     approved_by?: string;
-  }): Promise<Refund> {
+  }, client?: PoolClient): Promise<Refund> {
     const sql = `
       INSERT INTO order_refunds (
         order_id,
@@ -124,7 +127,8 @@ export class PaymentModel {
       data.approved_by || null,
     ];
 
-    const result = await query(sql, values);
+    const executor: Executor = client ?? { query };
+    const result = await executor.query(sql, values);
     return result.rows[0] as Refund;
   }
 
@@ -151,14 +155,15 @@ export class PaymentModel {
   /**
    * Find refunds by payment ID
    */
-  static async findRefundsByPaymentId(paymentId: string): Promise<Refund[]> {
+  static async findRefundsByPaymentId(paymentId: string, client?: PoolClient): Promise<Refund[]> {
     const sql = `
       SELECT * FROM order_refunds
       WHERE payment_id = $1
       ORDER BY refund_date DESC;
     `;
 
-    const result = await query(sql, [paymentId]);
+    const executor: Executor = client ?? { query };
+    const result = await executor.query(sql, [paymentId]);
     return result.rows as Refund[];
   }
 
@@ -167,7 +172,8 @@ export class PaymentModel {
    */
   static async updatePaymentStatus(
     paymentId: string,
-    status: string
+    status: string,
+    client?: PoolClient
   ): Promise<void> {
     const sql = `
       UPDATE order_payments
@@ -175,13 +181,14 @@ export class PaymentModel {
       WHERE id = $2;
     `;
 
-    await query(sql, [status, paymentId]);
+    const executor: Executor = client ?? { query };
+    await executor.query(sql, [status, paymentId]);
   }
 
   /**
    * Recalculate order payment status after refund
    */
-  static async recalculateOrderPaymentStatus(orderId: string): Promise<void> {
+  static async recalculateOrderPaymentStatus(orderId: string, client?: PoolClient): Promise<void> {
     const sql = `
       WITH payment_net AS (
         SELECT 
@@ -226,6 +233,7 @@ export class PaymentModel {
       WHERE id = $1;
     `;
   
-    await query(sql, [orderId]);
+    const executor: Executor = client ?? { query };
+    await executor.query(sql, [orderId]);
   }
 }

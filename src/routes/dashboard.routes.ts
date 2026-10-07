@@ -39,15 +39,22 @@ router.get(
   asyncHandler(DashboardController.getTodaySoldProducts)
 );
 
-router.get('/recent-orders',          asyncHandler(DashboardController.getRecentOrders));
+router.get('/recent-orders',          authenticate,
+  authorize("admin", "manager"),           asyncHandler(DashboardController.getRecentOrders));
 
-router.get('/credit-aging',           asyncHandler(DashboardController.getCreditAging));
+router.get('/credit-aging',           authenticate,
+  authorize("admin", "manager"),           asyncHandler(DashboardController.getCreditAging));
 
-router.get('/sales-chart',            validateRequest(salesChartSchema),      asyncHandler(DashboardController.getSalesChart));
-router.get('/hourly-heatmap',         asyncHandler(DashboardController.getHourlyHeatmap));
-router.get('/staff-performance',      validateRequest(staffPerformanceSchema), asyncHandler(DashboardController.getStaffPerformance));
+router.get('/sales-chart',            authenticate,
+  authorize("admin", "manager"),      validateRequest(salesChartSchema),      asyncHandler(DashboardController.getSalesChart));
+router.get('/hourly-heatmap',         authenticate,
+  authorize("admin", "manager"),           asyncHandler(DashboardController.getHourlyHeatmap));
+router.get('/staff-performance',      authenticate,
+  authorize("admin", "manager"),      validateRequest(staffPerformanceSchema), asyncHandler(DashboardController.getStaffPerformance));
 
-router.get('/discount-analysis',      asyncHandler(DashboardController.getDiscountAnalysis));
-router.get('/cancellation-analysis',  asyncHandler(DashboardController.getCancellationAnalysis));
+router.get('/discount-analysis',      authenticate,
+  authorize("admin", "manager"),           asyncHandler(DashboardController.getDiscountAnalysis));
+router.get('/cancellation-analysis',  authenticate,
+  authorize("admin", "manager"),           asyncHandler(DashboardController.getCancellationAnalysis));
 
 export default router;

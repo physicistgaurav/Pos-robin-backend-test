@@ -51,8 +51,8 @@ router.get("/:id", asyncHandler(CategoryController.getById));
 router.get("/:id/subcategories", asyncHandler(CategoryController.getSubcategories));
 
 // Toggle category: Deactivate category & Reactivate category
-router.patch("/:id/deactivate", asyncHandler(CategoryController.deactivateCategory))
-router.patch("/:id/reactivate", asyncHandler(CategoryController.reactivateCategory))
+router.patch("/:id/deactivate", authorize("admin", "manager"), asyncHandler(CategoryController.deactivateCategory))
+router.patch("/:id/reactivate", authorize("admin", "manager"), asyncHandler(CategoryController.reactivateCategory))
 
 todo
 // DELETE category

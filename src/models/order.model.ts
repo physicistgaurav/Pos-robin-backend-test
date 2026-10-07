@@ -833,15 +833,23 @@ export class OrderModel {
     ]);
   }
 
-  static async cancel(id: string, reason: string): Promise<boolean> {
-    const sql = `UPDATE orders 
+  static async cancel(client: any, id: string, reason: string): Promise<boolean>;
+  static async cancel(id: string, reason: string): Promise<boolean>;
+  static async cancel(clientOrId: any, idOrReason: string, reason?: string): Promise<boolean> {
+    const isClient = typeof clientOrId !== 'string';
+    const client = isClient ? clientOrId : null;
+    const id = isClient ? idOrReason : clientOrId;
+    const cancelReason = isClient ? reason : idOrReason;
+
+    const sql = `UPDATE orders
     SET
       status = 'cancelled',
       cancellation_reason = $1
     WHERE id = $2
     RETURNING *
     `;
-    const result = await query(sql, [reason, id]);
+    const executor = client ?? { query: query as typeof query };
+    const result = await executor.query(sql, [cancelReason, id]);
     return result.rowCount !== null && result.rowCount > 0;
   }
 
