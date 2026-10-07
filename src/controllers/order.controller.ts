@@ -102,7 +102,7 @@ export class OrderController {
     const { id } = req.params;
     const { reason } = req.body;
 
-    const order = await OrderService.cancelOrder(id, reason);
+    const order = await OrderService.cancelOrder(id, reason, req.user!.userId);
     return ApiResponse.success(res, order, ORDERS_RESPONSE.CANCEL);
   }
 

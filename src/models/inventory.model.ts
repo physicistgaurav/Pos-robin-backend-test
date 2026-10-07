@@ -130,12 +130,15 @@ export class InventoryModel {
     reason?: string | null;
     notes?: string | null;
     created_by: string;
-  }) {
+  }, client?: PoolClient) {
     // Verify product is tracked
-    const stock = await this.getStockByProductId(data.product_id);
+    const stock = client
+      ? (await client.query(`SELECT * FROM inventory_stock WHERE product_id = $1`, [data.product_id])).rows[0]
+      : await this.getStockByProductId(data.product_id);
     if (!stock) throw new Error('Product not found in inventory');
 
-    const result = await query(`
+    const executor = client ?? { query: query as typeof query };
+    const result = await executor.query(`
       INSERT INTO stock_movements (
         product_id, movement_type, quantity, unit_cost, total_cost,
         order_id, order_item_id, store_txn_id,

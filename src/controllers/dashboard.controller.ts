@@ -116,9 +116,9 @@ export class DashboardController {
 
   static async getRecentOrders(req: Request, res: Response): Promise<Response> {
     const { limit } = req.query as any;
-    const result = await DashboardService.getRecentOrders(
-      limit ? parseInt(limit) : 20
-    );
+    const parsed = parseInt(limit);
+    const safeLimit = Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed, 100) : 20;
+    const result = await DashboardService.getRecentOrders(safeLimit);
     return ApiResponse.success(res, result, 'Recent orders fetched', 200);
   }
 

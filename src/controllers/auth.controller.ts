@@ -121,7 +121,15 @@ export class AuthController {
 
   static async updateUser(req: Request, res: Response): Promise<Response> {
     const id = req.params.id;
-    const user = await UserModel.update(id, req.body);
+    const body = { ...req.body };
+
+    // Only admins may change roles. Managers editing a user must not be
+    // able to escalate anyone (including themselves) to admin via this route.
+    if (req.user?.role !== "admin" && body.role !== undefined) {
+      throw ApiError.forbidden("Only admins can change user roles");
+    }
+
+    const user = await UserModel.update(id, body);
 
     if (!user) {
       return ApiResponse.success(res, null, AUTH_RESPONSE.NO_USER, 404);
@@ -165,6 +173,9 @@ export class AuthController {
 
   static async deleteUser(req: Request, res: Response): Promise<Response> {
     const id = req.params.id;
+
+    await AuthService.assertUserCanBeDisabled(id, req.user!.userId);
+
     const deleted = await UserModel.delete(id);
 
     if (!deleted) {
@@ -180,6 +191,8 @@ export class AuthController {
     const user = await UserModel.findById(id);
 
     if (!user) throw ApiError.notFound(AUTH_RESPONSE.NO_USER);
+
+    await AuthService.assertUserCanBeDisabled(id, req.user!.userId);
 
     await UserModel.deactivate(user.id);
 

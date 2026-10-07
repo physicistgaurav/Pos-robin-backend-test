@@ -11,7 +11,9 @@ export class PaymentController {
    */
   static async processPayment(req: Request, res: Response): Promise<Response> {
     const { orderId } = req.params;
-    const paymentData = req.body;
+    // Staff identity comes from the JWT, never from the request body —
+    // otherwise anyone could attribute payments to another user.
+    const paymentData = { ...req.body, processed_by: req.user!.userId };
 
     const result = await PaymentService.processPayment(orderId, paymentData);
 
@@ -47,7 +49,7 @@ export class PaymentController {
    */
   static async refundPayment(req: Request, res: Response): Promise<Response> {
     const { orderId, paymentId } = req.params;
-    const refundData = req.body;
+    const refundData = { ...req.body, refunded_by: req.user!.userId };
 
     const result = await PaymentService.refundPayment(
       orderId,

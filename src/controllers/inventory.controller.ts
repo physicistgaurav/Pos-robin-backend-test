@@ -21,17 +21,17 @@ export class InventoryController {
   }
 
   static async adjustStock(req: Request, res: Response): Promise<Response> {
-    const result = await InventoryService.adjustStock(req.params.productId, req.body);
+    const result = await InventoryService.adjustStock(req.params.productId, { ...req.body, processed_by: req.user!.userId });
     return ApiResponse.success(res, result, 'Stock adjusted', 201);
   }
 
   static async purchaseStock(req: Request, res: Response): Promise<Response> {
-    const result = await InventoryService.purchaseStock(req.params.productId, req.body);
+    const result = await InventoryService.purchaseStock(req.params.productId, { ...req.body, processed_by: req.user!.userId });
     return ApiResponse.success(res, result, 'Stock purchase recorded', 201);
   }
 
   static async recordWastage(req: Request, res: Response): Promise<Response> {
-    const result = await InventoryService.recordWastage(req.params.productId, req.body);
+    const result = await InventoryService.recordWastage(req.params.productId, { ...req.body, processed_by: req.user!.userId });
     return ApiResponse.success(res, result, 'Wastage recorded', 201);
   }
 
