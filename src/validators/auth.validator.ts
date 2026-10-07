@@ -34,8 +34,10 @@ export const loginSchema = {
 };
 
 export const refreshTokenSchema = {
+  // refreshToken may also arrive via the httpOnly cookie
+  // (see AuthController.refreshToken), so the body field is optional.
   body: Joi.object({
-    refreshToken: Joi.string().required(),
+    refreshToken: Joi.string().optional(),
   }),
 };
 

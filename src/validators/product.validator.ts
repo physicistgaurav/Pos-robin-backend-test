@@ -71,7 +71,7 @@ export const updateProductSchema = {
     selling_price: Joi.number().min(0).optional(),
     compare_at_price: Joi.number().min(0).optional(),
 
-    department: Joi.string().valid("kitchen", "bar").default("kitchen"), 
+    department: Joi.string().valid("kitchen", "bar").optional(),
 
     is_inventory_tracked: Joi.boolean().optional(),
 

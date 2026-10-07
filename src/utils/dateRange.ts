@@ -47,6 +47,36 @@ function addNPTDays(utcDate: Date, days: number): Date {
   return fromNPTWallClock(npt);
 }
 
+/** Parse a 'YYYY-MM-DD' string as a Kathmandu calendar date -> NPT 00:00 as UTC ISO */
+export function nptDayStartUTC(dateStr: string): string {
+  const [y, m, d] = dateStr.slice(0, 10).split('-').map(Number);
+  return fromNPTWallClock(new Date(Date.UTC(y, m - 1, d, 0, 0, 0, 0))).toISOString();
+}
+
+/** Parse a 'YYYY-MM-DD' string as a Kathmandu calendar date -> NPT 23:59:59.999 as UTC ISO */
+export function nptDayEndUTC(dateStr: string): string {
+  const [y, m, d] = dateStr.slice(0, 10).split('-').map(Number);
+  return fromNPTWallClock(new Date(Date.UTC(y, m - 1, d, 23, 59, 59, 999))).toISOString();
+}
+
+/** Last N full Kathmandu days ending now: from = NPT 00:00 (N-1 days ago), to = now */
+export function lastNNPTDays(n: number): { from: string; to: string } {
+  const now = new Date();
+  return {
+    from: startOfNPTDay(addNPTDays(now, -(n - 1))).toISOString(),
+    to: now.toISOString(),
+  };
+}
+
+/** Today in Kathmandu: from = NPT 00:00 today, to = now */
+export function todayNPT(): { from: string; to: string } {
+  const now = new Date();
+  return {
+    from: startOfNPTDay(now).toISOString(),
+    to: now.toISOString(),
+  };
+}
+
 export function resolveDateRange(
   mode:        RangeMode | undefined,
   customFrom?: string,
@@ -54,11 +84,11 @@ export function resolveDateRange(
 ): DateRange {
   const now = new Date();
 
-  // ── Custom range ────────────────────────────────────────────────────────
+  // ── Custom range: YYYY-MM-DD is a Kathmandu calendar day ───────────────
   if (customFrom && customTo) {
     return {
-      from: new Date(customFrom).toISOString(),
-      to:   new Date(customTo).toISOString(),
+      from: nptDayStartUTC(customFrom),
+      to:   nptDayEndUTC(customTo),
       mode: 'custom',
     };
   }
