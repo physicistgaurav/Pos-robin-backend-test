@@ -1,4 +1,5 @@
 import { query } from "../config/database";
+import { lastNNPTDays, nptDayEndUTC, nptDayStartUTC, todayNPT } from "../utils/dateRange";
 
 type Period = 'daily' | 'weekly' | 'monthly' | 'yearly';
 
@@ -69,18 +70,6 @@ function periodTrunc(period: Period): string {
 }
 
 
-// Default date range helper (last N days)
-function defaultDateRange(days: number) {
-  const to = new Date();
-  const from = new Date();
-  from.setDate(from.getDate() - days + 1);   // inclusive
-
-  return {
-    from: from.toISOString().slice(0, 10),   // YYYY-MM-DD
-    to:   to.toISOString().slice(0, 10),
-  };
-}
-
 // ── Zero-value guard so the response shape is always consistent ──────────
 function zeroSummary() {
   return {
@@ -129,7 +118,8 @@ export class DashboardService {
             COALESCE(SUM(total_amount) FILTER (WHERE status = 'completed'), 0) AS revenue,
             COUNT(*) FILTER (WHERE status = 'completed')                       AS orders
           FROM orders
-          WHERE DATE(order_time) = CURRENT_DATE - 1
+          WHERE (order_time AT TIME ZONE 'Asia/Kathmandu')::date
+              = (NOW() AT TIME ZONE 'Asia/Kathmandu')::date - 1
         `),
         query(`SELECT * FROM v_today_payment_breakdown`),
         query(`SELECT * FROM v_today_credit_activity`),
@@ -143,7 +133,8 @@ export class DashboardService {
               WHERE type = 'outgoing' AND status = 'active'
             ), 0) AS this_month_expense
           FROM store_transactions
-          WHERE DATE_TRUNC('month', transaction_date) = DATE_TRUNC('month', NOW())
+          WHERE DATE_TRUNC('month', transaction_date AT TIME ZONE 'Asia/Kathmandu')
+              = DATE_TRUNC('month', NOW() AT TIME ZONE 'Asia/Kathmandu')
         `),
         query(`SELECT * FROM v_table_occupancy`),
       ]);
@@ -213,15 +204,12 @@ export class DashboardService {
     }
   
     // ─── 2. SALES SUMMARY (date range) ──────────────────────────────────────
+    // from/to arrive as UTC ISO instants that already represent exact
+    // Kathmandu (NPT) window boundaries — resolved by resolveDateRange.
+    // They are used as-is: no +1 day, no server-local date math.
     static async getSalesSummary(from: string, to: string) {
-      const fromDate = new Date(from);
-      const toDate = new Date(to);
-    
-      // include full end day
-      toDate.setDate(toDate.getDate() + 1);
-    
-      const fromTs = fromDate.toISOString();
-      const toTs = toDate.toISOString();
+      const fromTs = new Date(from).toISOString();
+      const toTs = new Date(to).toISOString();
     
       const [
         summaryResult,
@@ -249,27 +237,29 @@ export class DashboardService {
             2) AS cancellation_rate_pct,
     
             /* ───── SALES CORE ───── */
-            COALESCE(SUM(subtotal), 0) AS gross_sales,
+            /* Completed orders only: cancelled/pending orders never
+               collected money, so they must not inflate revenue KPIs. */
+            COALESCE(SUM(subtotal) FILTER (WHERE status = 'completed'), 0) AS gross_sales,
     
-            COALESCE(SUM(discount_amount), 0) AS total_discounts,
+            COALESCE(SUM(discount_amount) FILTER (WHERE status = 'completed'), 0) AS total_discounts,
     
-            COALESCE(SUM(subtotal - discount_amount), 0) AS net_sales,
+            COALESCE(SUM(subtotal - discount_amount) FILTER (WHERE status = 'completed'), 0) AS net_sales,
     
-            COALESCE(SUM(tax_amount), 0) AS total_tax,
-            COALESCE(SUM(service_charge_amount), 0) AS total_service_charge,
+            COALESCE(SUM(tax_amount) FILTER (WHERE status = 'completed'), 0) AS total_tax,
+            COALESCE(SUM(service_charge_amount) FILTER (WHERE status = 'completed'), 0) AS total_service_charge,
     
             /* ───── REAL MONEY FLOW ───── */
             COALESCE(SUM(total_amount) FILTER (WHERE payment_status = 'paid'), 0) AS cash_collected,
     
-            COALESCE(SUM(total_amount) FILTER (WHERE payment_status != 'paid'), 0) AS outstanding_amount,
+            COALESCE(SUM(total_amount) FILTER (WHERE payment_status != 'paid' AND status != 'cancelled'), 0) AS outstanding_amount,
     
             /* ───── AOV ───── */
             ROUND(
               AVG(total_amount) FILTER (WHERE status = 'completed'),
             2) AS avg_order_value,
     
-            MAX(total_amount) AS max_order_value,
-            MIN(total_amount) AS min_order_value,
+            MAX(total_amount) FILTER (WHERE status = 'completed') AS max_order_value,
+            MIN(total_amount) FILTER (WHERE status = 'completed') AS min_order_value,
     
             /* ───── ITEM INSIGHTS ───── */
             (
@@ -301,7 +291,7 @@ export class DashboardService {
           `
           SELECT
             TO_CHAR(
-              (order_time AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kathmandu'),
+              order_time AT TIME ZONE 'Asia/Kathmandu',
               'YYYY-MM-DD'
             ) AS date,
             COUNT(*) AS total_orders,
@@ -443,14 +433,10 @@ export class DashboardService {
   // In DashboardService
 
     static async getFoodDrinkSales(from: string, to: string) {
-      const fromDate = new Date(from);
-      const toDate   = new Date(to);
-
-      // Include the full end day (mirrors getSalesSummary)
-      toDate.setDate(toDate.getDate() + 1);
-
-      const fromTs = fromDate.toISOString();
-      const toTs   = toDate.toISOString();
+      // from/to are UTC ISO instants of exact NPT window boundaries
+      // (resolved by resolveDateRange) — used as-is.
+      const fromTs = new Date(from).toISOString();
+      const toTs   = new Date(to).toISOString();
 
       const [
         summaryResult,
@@ -476,7 +462,8 @@ query(`
       SUM(total_price) / NULLIF(SUM(quantity), 0),
     2)                                     AS avg_item_price
   FROM v_food_drink_sales
-  WHERE period_day BETWEEN $1 AND $2
+  WHERE period_day >= ($1::timestamptz AT TIME ZONE 'Asia/Kathmandu')
+    AND period_day <= ($2::timestamptz AT TIME ZONE 'Asia/Kathmandu')
   GROUP BY item_type
   ORDER BY revenue DESC
 `, [fromTs, toTs]),
@@ -485,7 +472,7 @@ query(`
 query(`
   SELECT
     TO_CHAR(
-      period_day AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kathmandu',
+      period_day,
       'YYYY-MM-DD'
     )                            AS date,
     item_type                    AS department,
@@ -493,7 +480,8 @@ query(`
     SUM(quantity)                AS items_sold,
     SUM(total_price)             AS revenue
   FROM v_food_drink_sales
-  WHERE period_day BETWEEN $1 AND $2
+  WHERE period_day >= ($1::timestamptz AT TIME ZONE 'Asia/Kathmandu')
+    AND period_day <= ($2::timestamptz AT TIME ZONE 'Asia/Kathmandu')
   GROUP BY period_day, item_type
   ORDER BY 1 ASC, 2 ASC
 `, [fromTs, toTs]),
@@ -515,7 +503,8 @@ query(`
       / NULLIF(SUM(SUM(total_price)) OVER (PARTITION BY item_type), 0),
     2)                                     AS revenue_pct_within_dept
   FROM v_food_drink_sales
-  WHERE period_day BETWEEN $1 AND $2
+  WHERE period_day >= ($1::timestamptz AT TIME ZONE 'Asia/Kathmandu')
+    AND period_day <= ($2::timestamptz AT TIME ZONE 'Asia/Kathmandu')
     AND main_category_id IS NOT NULL
   GROUP BY item_type, category_name, category_id
   ORDER BY item_type, revenue DESC
@@ -536,7 +525,8 @@ query(`
       / NULLIF(SUM(SUM(total_price)) OVER (PARTITION BY item_type), 0),
     2)                                     AS revenue_pct_within_dept
   FROM v_food_drink_sales
-  WHERE period_day BETWEEN $1 AND $2
+  WHERE period_day >= ($1::timestamptz AT TIME ZONE 'Asia/Kathmandu')
+    AND period_day <= ($2::timestamptz AT TIME ZONE 'Asia/Kathmandu')
   GROUP BY item_type, main_category_name, sub_category_name, sub_category_id
   ORDER BY item_type, revenue DESC
 `, [fromTs, toTs]),
@@ -564,7 +554,8 @@ query(`
         ORDER BY SUM(total_price) DESC
       )                                      AS rn
     FROM v_food_drink_sales
-    WHERE period_day BETWEEN $1 AND $2
+    WHERE period_day >= ($1::timestamptz AT TIME ZONE 'Asia/Kathmandu')
+    AND period_day <= ($2::timestamptz AT TIME ZONE 'Asia/Kathmandu')
     GROUP BY item_type, product_id
   )
   SELECT r.*, p.name AS product_name
@@ -620,13 +611,16 @@ query(`
 
     // ─── 4. SALES CHART ─────────────────────────────────────────────────────
     static async getSalesChart(period: Period, from?: string, to?: string) {
-      const range = from && to ? { from, to } : defaultDateRange(30);
+      // Raw query params are Kathmandu calendar days; fall back to last 30 NPT days.
+      const range = from && to
+        ? { from: nptDayStartUTC(from), to: nptDayEndUTC(to) }
+        : lastNNPTDays(30);
       const trunc = periodTrunc(period);
-  
+
       const result = await query(
         `
         SELECT
-          DATE_TRUNC('${trunc}', order_time)                                    AS period,
+          DATE_TRUNC('${trunc}', order_time AT TIME ZONE 'Asia/Kathmandu')      AS period,
           COUNT(*)                                                              AS total_orders,
           COUNT(*) FILTER (WHERE status = 'completed')                         AS completed_orders,
           COUNT(*) FILTER (WHERE status = 'cancelled')                         AS cancelled_orders,
@@ -652,28 +646,29 @@ query(`
       limit?:       number;
       category_id?: string;
     }) {
-      const fromDate = new Date(filters.from);
-      const toDate   = new Date(filters.to);
-    
-      // Include full end day
-      toDate.setDate(toDate.getDate() + 1);
-    
+      // from/to are UTC ISO instants of exact NPT window boundaries
+      // (resolved by resolveDateRange) — used as-is.
+      const fromTs = new Date(filters.from).toISOString();
+      const toTs = new Date(filters.to).toISOString();
+      // Guard the limit: default 10, hard cap 100 — unbounded product
+      // dumps were killing the dashboard.
+      const limit = Math.min(Math.max(Math.floor(filters.limit ?? 10) || 10, 1), 100);
+
       const conditions = [
         `o.status = 'completed'`,
         `o.order_time >= $1`,
         `o.order_time <  $2`,
       ];
-    
-      const values: any[] = [fromDate, toDate];
+
+      const values: any[] = [fromTs, toTs];
       let idx = 3;
-    
+
       if (filters.category_id) {
         conditions.push(`p.category_id = $${idx++}`);
         values.push(filters.category_id);
       }
-    
-      // values.push(filters.limit ?? 10);
-      // -- removed limit to get all products
+
+      values.push(limit);
     
       const result = await query(
         `
@@ -700,7 +695,7 @@ query(`
         WHERE ${conditions.join(' AND ')}
         GROUP BY p.id, p.name, p.department, p.selling_price, c.name, c2.name
         ORDER BY total_revenue DESC
-        -- LIMIT $${idx} -- removed limit to get all products
+        LIMIT $${idx}
         `,
         values
       );
@@ -710,14 +705,10 @@ query(`
 
 
     static async getTodaySoldProducts() {
-
-      // Start of today
-      const startDate = new Date();
-      startDate.setHours(0, 0, 0, 0);
-    
-      // Start of tomorrow
-      const endDate = new Date();
-      endDate.setHours(24, 0, 0, 0);
+      // "Today" in Kathmandu wall time; sold = completed orders only.
+      const { from, to } = todayNPT();
+      const startDate = from;
+      const endDate = to;
     
       const result = await query(
         `
@@ -749,7 +740,7 @@ query(`
           ON oi.order_id = o.id
     
         WHERE
-          o.status != 'cancelled'
+          o.status = 'completed'
           AND o.order_time >= $1
           AND o.order_time < $2
     
@@ -784,7 +775,10 @@ query(`
   
     // ─── 8. STAFF PERFORMANCE ───────────────────────────────────────────────
     static async getStaffPerformance(from?: string, to?: string) {
-      const range = from && to ? { from, to } : defaultDateRange(1);
+      // Raw query params are Kathmandu calendar days; default = today in NPT.
+      const range = from && to
+        ? { from: nptDayStartUTC(from), to: nptDayEndUTC(to) }
+        : todayNPT();
   
       const result = await query(
         `
@@ -871,7 +865,9 @@ query(`
   
     // ─── 10. DISCOUNT ANALYSIS ──────────────────────────────────────────────
     static async getDiscountAnalysis(from?: string, to?: string) {
-      const range = from && to ? { from, to } : defaultDateRange(30);
+      const range = from && to
+        ? { from: nptDayStartUTC(from), to: nptDayEndUTC(to) }
+        : lastNNPTDays(30);
   
       const result = await query(
         `
@@ -901,7 +897,9 @@ query(`
   
     // ─── 11. CANCELLATION ANALYSIS ──────────────────────────────────────────
     static async getCancellationAnalysis(from?: string, to?: string) {
-      const range = from && to ? { from, to } : defaultDateRange(30);
+      const range = from && to
+        ? { from: nptDayStartUTC(from), to: nptDayEndUTC(to) }
+        : lastNNPTDays(30);
   
       const result = await query(
         `
