@@ -13,8 +13,8 @@ const pool = new Pool({
   password: process.env.DB_PASSWORD || "",
 });
 
-// const MIGRATIONS_DIR = path.join(__dirname, "src", "database", "migrations");
-const MIGRATIONS_DIR = path.join(__dirname, "database", "migrations");
+const MIGRATIONS_DIR = path.join(__dirname, "src", "database", "migrations");
+// const MIGRATIONS_DIR = path.join(__dirname, "database", "migrations");
 
 async function createMigrationTable() {
   const createTableSQL = `
