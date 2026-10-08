@@ -62,12 +62,14 @@ router.get(
 
 router.post(
   '/customer/:id/payment',
+  authorize("admin", "manager"),
   validateRequest(recordPaymentSchema),
   asyncHandler(CreditCustomerController.recordPayment)
 );
 
 router.post(
   '/customer/:id/adjustments',
+  authorize("admin", "manager"),
   validateRequest(adjustBalanceSchema),
   asyncHandler(CreditCustomerController.adjustBalance)
 );

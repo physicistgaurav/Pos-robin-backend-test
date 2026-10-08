@@ -5,12 +5,12 @@ import { ApiResponse } from '../utils/ApiResponse';
 export class StoreTransactionController {
 
   static async create(req: Request, res: Response): Promise<Response> {
-    const result = await StoreTransactionService.create(req.body);
+    const result = await StoreTransactionService.create({ ...req.body, created_by: req.user!.userId });
     return ApiResponse.success(res, result, 'Transaction created', 201);
   }
 
   static async void(req: Request, res: Response): Promise<Response> {
-    const result = await StoreTransactionService.void(req.params.id,req.body);
+    const result = await StoreTransactionService.void(req.params.id, { ...req.body, voided_by: req.user!.userId });
     return ApiResponse.success(res, result, 'Transaction voided', 201);
   }
   

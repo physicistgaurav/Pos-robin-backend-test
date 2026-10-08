@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { validateRequest } from '../middleware/validateRequest';
 import { asyncHandler } from '../middleware/asyncHandler';
 import { InventoryController } from '../controllers/inventory.controller';
+import { authenticate, authorize } from '../middleware/auth.middleware';
 import {
   toggleInventoryTrackingSchema, getInventoryProductsSchema,
   getStockSchema, adjustStockSchema, purchaseStockSchema,
@@ -10,19 +11,25 @@ import {
 
 const router = Router();
 
+// All inventory endpoints require authentication — stock movements are money.
+router.use(authenticate);
+
+const STAFF_ROLES = ["admin", "manager", "staff"] as const;
+const MANAGER_ROLES = ["admin", "manager"] as const;
+
 // Products
-router.get('/products', validateRequest(getInventoryProductsSchema), asyncHandler(InventoryController.getInventoryProducts));
-router.patch('/products/:id/toggle', validateRequest(toggleInventoryTrackingSchema), asyncHandler(InventoryController.toggleTracking));
+router.get('/products', authorize(...STAFF_ROLES), validateRequest(getInventoryProductsSchema), asyncHandler(InventoryController.getInventoryProducts));
+router.patch('/products/:id/toggle', authorize(...MANAGER_ROLES), validateRequest(toggleInventoryTrackingSchema), asyncHandler(InventoryController.toggleTracking));
 
 // Stock
-router.get('/stock', validateRequest(getStockSchema), asyncHandler(InventoryController.getStock));
-router.get('/stock/low-stock', asyncHandler(InventoryController.getLowStock));
-router.post('/stock/:productId/adjust', validateRequest(adjustStockSchema), asyncHandler(InventoryController.adjustStock));
-router.post('/stock/:productId/purchase', validateRequest(purchaseStockSchema), asyncHandler(InventoryController.purchaseStock));
-router.post('/stock/:productId/wastage', validateRequest(wastageStockSchema), asyncHandler(InventoryController.recordWastage));
+router.get('/stock', authorize(...STAFF_ROLES), validateRequest(getStockSchema), asyncHandler(InventoryController.getStock));
+router.get('/stock/low-stock', authorize(...STAFF_ROLES), asyncHandler(InventoryController.getLowStock));
+router.post('/stock/:productId/adjust', authorize(...MANAGER_ROLES), validateRequest(adjustStockSchema), asyncHandler(InventoryController.adjustStock));
+router.post('/stock/:productId/purchase', authorize(...MANAGER_ROLES), validateRequest(purchaseStockSchema), asyncHandler(InventoryController.purchaseStock));
+router.post('/stock/:productId/wastage', authorize(...MANAGER_ROLES), validateRequest(wastageStockSchema), asyncHandler(InventoryController.recordWastage));
 
 // Movements
-router.get('/movements/:productId', validateRequest(getMovementsSchema), asyncHandler(InventoryController.getMovements));
+router.get('/movements/:productId', authorize(...STAFF_ROLES), validateRequest(getMovementsSchema), asyncHandler(InventoryController.getMovements));
 
 export default router;
 

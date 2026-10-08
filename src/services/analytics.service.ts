@@ -17,8 +17,8 @@ export class AnalyticsService {
         COUNT(*) as total_orders,
         COALESCE(AVG(total_amount), 0) as average_order_value
       FROM orders
-      WHERE created_at >= $1 AND created_at <= $2
-        AND status IN ('completed', 'served')
+      WHERE order_time >= $1 AND order_time <= $2
+        AND status = 'completed'
     `;
 
     const result = await query(sql, [startDate, endDate]);
@@ -36,15 +36,15 @@ export class AnalyticsService {
   static async getTopMenuItems(limit: number = 10): Promise<TopMenuItem[]> {
     const sql = `
       SELECT
-        mi.id as menu_item_id,
-        mi.name as menu_item_name,
+        p.id as menu_item_id,
+        p.name as menu_item_name,
         SUM(oi.quantity) as total_quantity,
-        SUM(oi.subtotal) as total_revenue
+        SUM(oi.total_price) as total_revenue
       FROM order_items oi
-      JOIN menu_items mi ON oi.menu_item_id = mi.id
+      JOIN products p ON oi.product_id = p.id
       JOIN orders o ON oi.order_id = o.id
       WHERE o.status IN ('completed', 'served')
-      GROUP BY mi.id, mi.name
+      GROUP BY p.id, p.name
       ORDER BY total_revenue DESC
       LIMIT $1
     `;
@@ -64,13 +64,13 @@ export class AnalyticsService {
   ): Promise<DailySales[]> {
     const sql = `
       SELECT
-        DATE(created_at) as date,
+        (order_time AT TIME ZONE 'Asia/Kathmandu')::date as date,
         COALESCE(SUM(total_amount), 0) as total_sales,
         COUNT(*) as order_count
       FROM orders
-      WHERE created_at >= $1 AND created_at <= $2
-        AND status IN ('completed', 'served')
-      GROUP BY DATE(created_at)
+      WHERE order_time >= $1 AND order_time <= $2
+        AND status = 'completed'
+      GROUP BY 1
       ORDER BY date
     `;
 
@@ -85,14 +85,15 @@ export class AnalyticsService {
   static async getCategorySales(): Promise<CategorySales[]> {
     const sql = `
       SELECT
-        mi.category,
-        COALESCE(SUM(oi.subtotal), 0) as total_sales,
-        COUNT(DISTINCT oi.menu_item_id) as item_count
+        c.name as category,
+        COALESCE(SUM(oi.total_price), 0) as total_sales,
+        COUNT(DISTINCT oi.product_id) as item_count
       FROM order_items oi
-      JOIN menu_items mi ON oi.menu_item_id = mi.id
+      JOIN products p ON oi.product_id = p.id
+      JOIN categories c ON p.category_id = c.id
       JOIN orders o ON oi.order_id = o.id
       WHERE o.status IN ('completed', 'served')
-      GROUP BY mi.category
+      GROUP BY c.name
       ORDER BY total_sales DESC
     `;
 

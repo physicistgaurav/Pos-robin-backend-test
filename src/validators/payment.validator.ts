@@ -28,7 +28,9 @@ export const processPaymentSchema = {
     card_last_4_digits: Joi.string().length(4).optional(),
     payment_gateway: Joi.string().optional(),
     notes: Joi.string().optional(),
-    processed_by: Joi.string().uuid().required(),
+    // Accepted for backwards compatibility but ignored: the server always
+    // uses the authenticated user from the JWT.
+    processed_by: Joi.string().uuid().optional(),
   }),
 };
 
@@ -46,7 +48,9 @@ export const refundPaymentSchema = {
   body: Joi.object({
     refund_amount: Joi.number().positive().precision(2).required(),
     reason: Joi.string().required(),
-    refunded_by: Joi.string().uuid().required(),
+    // Accepted for backwards compatibility but ignored: the server always
+    // uses the authenticated user from the JWT.
+    refunded_by: Joi.string().uuid().optional(),
     approved_by: Joi.string().uuid().optional(),
   }),
 };

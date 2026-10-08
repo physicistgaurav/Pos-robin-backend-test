@@ -78,7 +78,7 @@ router.put(
 router.put(
   "/users/:id/role",
   authenticate,
-  authorize("admin", "manager"),
+  authorize("admin"),
   validateRequest(changeUserRoleSchema),
   asyncHandler(AuthController.changeUserRole)
 );

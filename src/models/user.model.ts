@@ -196,4 +196,13 @@ export class UserModel {
 
     return result.rows[0] || null;
   }
+
+  static async countActiveAdminsExcluding(excludeUserId: string): Promise<number> {
+    const result = await query(
+      `SELECT COUNT(*)::int AS count FROM users
+       WHERE role = 'admin' AND is_active = true AND id != $1`,
+      [excludeUserId]
+    );
+    return result.rows[0].count;
+  }
 }

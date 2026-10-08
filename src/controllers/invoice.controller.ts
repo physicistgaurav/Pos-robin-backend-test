@@ -9,7 +9,8 @@ export class InvoiceController {
    * Create invoice from order
    */
   static async createInvoice(req: Request, res: Response): Promise<Response> {
-    const result = await InvoiceService.createInvoice(req.body);
+    // created_by comes from the JWT, never the request body.
+    const result = await InvoiceService.createInvoice({ ...req.body, created_by: req.user!.userId });
     return ApiResponse.success(
       res,
       result,

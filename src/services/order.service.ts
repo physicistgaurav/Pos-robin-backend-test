@@ -339,6 +339,15 @@ export class OrderService {
     }
   
     if (data.status) {
+      // Cancelling must go through cancelOrder(): it refuses orders that have
+      // payments recorded and returns stock. This generic update endpoint is open
+      // to waiters, so allowing 'cancelled' here bypassed both the money guard
+      // and the admin/manager-only cancel permission.
+      if (data.status === 'cancelled') {
+        throw ApiError.badRequest(
+          "Use the cancel endpoint to cancel an order (PATCH /orders/:id/cancel)."
+        );
+      }
       this.validateStatusTransition(exists.status, data.status);
     }
   
@@ -384,31 +393,53 @@ export class OrderService {
     });
   }
 
-   static async cancelOrder(id: string, reason: string){
-
-    const order = await OrderModel.findById(id);
-
-    if (!order) {
-      throw ApiError.notFound("Order not found");
-    }
-  
-    if (order.status === "cancelled") {
-      throw ApiError.badRequest("Order is already cancelled");
-    }
-  
-    if (order.status === "completed") {
-      throw ApiError.badRequest(
-        "Completed orders cannot be cancelled"
+   static async cancelOrder(id: string, reason: string, userId: string){
+    return transaction(async (client) => {
+      // Lock the order first: a payment arriving at the same moment waits for us
+      // (or we wait for it), so an order can never end up cancelled with money
+      // attached.
+      const { rows } = await client.query(
+        `SELECT id, status, paid_amount FROM orders WHERE id = $1 FOR UPDATE`,
+        [id]
       );
-    }
+      const order = rows[0];
 
-    const cancelled = await OrderModel.cancel(id, reason);
+      if (!order) {
+        throw ApiError.notFound("Order not found");
+      }
+      if (order.status === "cancelled") {
+        throw ApiError.badRequest("Order is already cancelled");
+      }
+      if (order.status === "completed") {
+        throw ApiError.badRequest("Completed orders cannot be cancelled");
+      }
 
-    if (!cancelled) {
-      throw ApiError.internal("Failed to cancel order");
-    }
+      // Money safety: never cancel an order that has money attached.
+      // Refund first so paid_amount returns to 0 via the refund flow.
+      if (Number(order.paid_amount) > 0) {
+        throw ApiError.badRequest(
+          "Cannot cancel an order with payments recorded. Refund the payments first, then cancel."
+        );
+      }
 
-    return cancelled;
+      // Restore stock for anything still deducted (an order reverted from
+      // completed -> pending can hold deducted items). Based on the movement
+      // ledger, so untracked products and never-deducted items are skipped.
+      const items = await OrderItemModel.findByOrderId(id, client);
+      for (const item of items) {
+        await InventoryService.restoreForOrderItem(
+          client, item, id, userId, `Order cancelled: ${reason}`
+        );
+      }
+
+      const cancelled = await OrderModel.cancel(client, id, reason);
+
+      if (!cancelled) {
+        throw ApiError.internal("Failed to cancel order");
+      }
+
+      return cancelled;
+    });
   }
 
   static async completeOrder(id: string) {
@@ -417,9 +448,7 @@ export class OrderService {
     if (!order) throw ApiError.notFound("Order not found");
     if (order.status === "completed") throw ApiError.badRequest("Order is already completed");
     if (order.status === "cancelled") throw ApiError.badRequest("Cancelled orders cannot be completed");
-  
-    const inventoryErrors: string[] = [];
-  
+
     return transaction(async (client) => {
       // Lock the row inside transaction
       const { rows } = await client.query(
@@ -427,44 +456,39 @@ export class OrderService {
         [id]
       );
       const current = rows[0];
-  
+
       if (!current) throw ApiError.notFound("Order not found");
       if (current.status === "completed") throw ApiError.badRequest("Order is already completed");
       if (current.status === "cancelled") throw ApiError.badRequest("Cancelled orders cannot be completed");
-  
+
       // ✅ Pass client — stays in same transaction, no separate pool connection
       const items = await OrderItemModel.findByOrderId(id, client);
-  
+
       for (const item of items) {
-        try {
-          // ✅ Pass client — inventory deduction in same transaction
-          await InventoryService.deductForOrder(
-            client,           // ← added
-            item.id,
-            item.product_id,
-            item.quantity,
-            id,
-            current.created_by
-          );
-        } catch (err: any) {
-          inventoryErrors.push(`${item.product_name}: ${err.message}`);
-        }
+        // Reconcile against the stock-movement ledger rather than item_status:
+        // items already deducted are skipped, a raised quantity deducts only the
+        // difference, a lowered one returns the difference. Any stock failure
+        // aborts the whole completion - an order is never "completed" with
+        // missing or partial deductions.
+        await InventoryService.reconcileForOrderItem(
+          client,
+          item,
+          id,
+          current.created_by
+        );
       }
-  
+
       await client.query(
         `UPDATE order_items SET item_status = 'completed', updated_at = NOW() WHERE order_id = $1`,
         [id]
       );
-  
+
       const result = await client.query(
         `UPDATE orders SET status = 'completed' WHERE id = $1 RETURNING *`,
         [id]
       );
-  
-      return {
-        ...result.rows[0],
-        inventory_warnings: inventoryErrors.length > 0 ? inventoryErrors : undefined,
-      };
+
+      return result.rows[0];
     });
   }
 
@@ -481,6 +505,9 @@ export class OrderService {
         "Cancelled orders cannot be served"
       );
     }
+
+    // Route through the status machine: only ready -> served is valid.
+    this.validateStatusTransition(order.status, 'served');
 
     const served = await OrderModel.serve(id);
 
@@ -607,8 +634,10 @@ if (BLOCKED_PAYMENT_STATUSES_FOR_ADDING_ITEMS.includes(order.payment_status)) {
           throw ApiError.badRequest(`Product "${product.name}" is no longer available`);
         }
   
-        // Keep historical unit_price, but update total_price based on new quantity
-        totalPrice = product.selling_price * updateData.quantity;
+        // Keep the historical unit_price snapshot: the customer was quoted
+        // this price when they ordered. Repricing with the current
+        // selling_price would make unit_price and total_price inconsistent.
+        totalPrice = Number(item.unit_price) * updateData.quantity;
       }
   
       // 4. Update the order item
@@ -631,10 +660,18 @@ if (BLOCKED_PAYMENT_STATUSES_FOR_ADDING_ITEMS.includes(order.payment_status)) {
       // 1 validate order and status
       const order = await OrderModel.findById(client, orderId);
       if (!order) throw ApiError.notFound("Order not found")
-      
-      // if(!ALLOWABLE_STATUSES_FOR_ADDING_ITEMS.includes(order.status)){
-      //   throw ApiError.badRequest(`Cannot remove items from order with status ${order.status}`)
-      // }  
+
+      // Items can only be removed while the order is still being built.
+      // Removing from completed/paid/cancelled orders would corrupt
+      // totals (paid_amount > total_amount) and skip stock restoration.
+      if(!ALLOWABLE_STATUSES_FOR_ADDING_ITEMS.includes(order.status)){
+        throw ApiError.badRequest(`Cannot remove items from order with status ${order.status}`)
+      }
+      if (order.payment_status !== 'unpaid') {
+        throw ApiError.badRequest(
+          "Cannot remove items from an order with payments recorded. Refund first."
+        );
+      }
 
       // 2 check if item exists and belongs o order
       const item = await OrderItemModel.findById(client, itemId)
@@ -643,7 +680,13 @@ if (BLOCKED_PAYMENT_STATUSES_FOR_ADDING_ITEMS.includes(order.payment_status)) {
         throw ApiError.badRequest("Item does not belong to this order")
       } 
       
-      //3 Delete the item
+      // 3. If this item was already deducted from stock (order reverted from
+      //    completed), put the stock back before the item disappears.
+      await InventoryService.restoreForOrderItem(
+        client, { id: itemId, product_id: item.product_id }, orderId, order.created_by, 'Order item removed'
+      );
+
+      // 4. Delete the item
       await OrderItemModel.delete(client, itemId)
 
       // 4. return updated order
@@ -656,6 +699,16 @@ if (BLOCKED_PAYMENT_STATUSES_FOR_ADDING_ITEMS.includes(order.payment_status)) {
     itemId: string,
     item_status: OrderItemStatus
   ) {
+    // 'completed' is reserved for completeOrder(). Setting it here would make
+    // completeOrder() skip this item ("already deducted") so its stock would
+    // never be deducted - and a later cancel would then ADD stock back that was
+    // never taken out.
+    if (item_status === 'completed') {
+      throw ApiError.badRequest(
+        "Items are marked completed by the complete-order action only."
+      );
+    }
+
     return transaction(async (client) => {
       const order = await OrderModel.findById(client, orderId);
       if (!order) throw ApiError.notFound("Order not found");

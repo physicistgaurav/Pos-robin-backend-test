@@ -203,7 +203,7 @@ export const updateOrderItemStatusSchema = {
   }),
   body: Joi.object({
     item_status: Joi.string()
-      .valid("pending", "confirmed", "preparing", "ready", "completed") 
+      .valid("pending", "confirmed", "preparing", "ready")
       .required(),
   }),
 };

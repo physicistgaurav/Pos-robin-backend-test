@@ -9,12 +9,17 @@ import {
 } from '../validators/invoice.validator';
 import { validateRequest } from '../middleware/validateRequest';
 import { asyncHandler } from '../middleware/asyncHandler';
+import { authenticate, authorize } from '../middleware/auth.middleware';
 
 const router = Router();
+
+// All invoice endpoints require authentication.
+router.use(authenticate);
 
 // Create invoice from order
 router.post(
   '/',
+  authorize("admin", "manager", "staff"),
   validateRequest(createInvoiceSchema),
   asyncHandler(InvoiceController.createInvoice)
 );
@@ -22,6 +27,7 @@ router.post(
 // Get all invoices with filters
 router.get(
   '/',
+  authorize("admin", "manager", "staff"),
   validateRequest(queryInvoicesSchema),
   asyncHandler(InvoiceController.getInvoices)
 );
@@ -29,20 +35,23 @@ router.get(
 // Get invoice by ID
 router.get(
   '/:id',
+  authorize("admin", "manager", "staff"),
   validateRequest(getInvoiceSchema),
   asyncHandler(InvoiceController.getInvoiceById)
 );
 
-// Update invoice
+// Update invoice — restricted
 router.put(
   '/:id',
+  authorize("admin", "manager"),
   validateRequest(updateInvoiceSchema),
   asyncHandler(InvoiceController.updateInvoice)
 );
 
-// Delete invoice
+// Delete invoice — restricted
 router.delete(
   '/:id',
+  authorize("admin", "manager"),
   validateRequest(getInvoiceSchema),
   asyncHandler(InvoiceController.deleteInvoice)
 );
@@ -50,6 +59,7 @@ router.delete(
 // Generate PDF
 router.get(
   '/:id/pdf',
+  authorize("admin", "manager", "staff"),
   validateRequest(getInvoiceSchema),
   asyncHandler(InvoiceController.generatePDF)
 );
@@ -57,6 +67,7 @@ router.get(
 // Download PDF
 router.get(
   '/:id/pdf/download',
+  authorize("admin", "manager", "staff"),
   validateRequest(getInvoiceSchema),
   asyncHandler(InvoiceController.downloadPDF)
 );
@@ -64,6 +75,7 @@ router.get(
 // Email invoice
 // router.post(
 //   '/:id/email',
+//   authorize("admin", "manager", "staff"),
 //   validateRequest(emailInvoiceSchema),
 //   asyncHandler(InvoiceController.emailInvoice)
 // );
@@ -71,6 +83,7 @@ router.get(
 // Record print (increment print count)
 router.post(
   '/:id/print',
+  authorize("admin", "manager", "staff"),
   validateRequest(getInvoiceSchema),
   asyncHandler(InvoiceController.recordPrint)
 );
@@ -78,18 +91,21 @@ router.post(
 // Get invoice by order ID
 router.get(
   '/order/:orderId',
+  authorize("admin", "manager", "staff"),
   asyncHandler(InvoiceController.getInvoiceByOrderId)
 );
 
 // Get invoice by invoice number
 router.get(
   '/number/:invoiceNumber',
+  authorize("admin", "manager", "staff"),
   asyncHandler(InvoiceController.getInvoiceByNumber)
 );
 
 // Reports
 router.get(
   '/reports/summary',
+  authorize("admin", "manager"),
   asyncHandler(InvoiceController.getInvoiceSummary)
 );
 

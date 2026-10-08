@@ -1,4 +1,4 @@
-import { todo } from "node:test";
+import { query } from "../config/database";
 import { TableModel } from "../models/table.model";
 import { Table, CreateTableDTO, UpdateTableDTO } from "../types/table.types";
 import { ApiError } from "../utils/ApiError";
@@ -85,8 +85,9 @@ export class TableService {
       throw ApiError.notFound(`Table with ID ${id} not found`);
     }
 
-    //business-logic before deactivating table-- no pending orders in that table--also--deleetig
-    todo
+    // Business rule: a table with open orders cannot be deactivated —
+    // it would orphan in-flight orders from their table.
+    await this.assertNoOpenOrders(id);
 
     const deactivatedTable = await TableModel.deactivate(id);
     if (!deactivatedTable) {
@@ -100,9 +101,6 @@ export class TableService {
       throw ApiError.notFound(`Table with ID ${id} not found`);
     }
 
-    //business-logic before deactivating table-- no pending orders in that table--also--deleetig
-    todo
-
     const deactivatedTable = await TableModel.reactivate(id);
     if (!deactivatedTable) {
       throw ApiError.internal("Failed to deactivate table");
@@ -115,9 +113,27 @@ export class TableService {
       throw ApiError.notFound(`Table with ID ${id} not found`);
     }
 
+    // Business rule: same as deactivate — never orphan open orders.
+    await this.assertNoOpenOrders(id);
+
     const deleted = await TableModel.delete(id);
     if (!deleted) {
       throw ApiError.internal("Failed to delete table");
+    }
+  }
+
+  private static async assertNoOpenOrders(tableId: string): Promise<void> {
+    const { rows } = await query(
+      `SELECT 1 FROM orders
+       WHERE table_id = $1
+         AND status NOT IN ('completed', 'cancelled')
+       LIMIT 1`,
+      [tableId]
+    );
+    if (rows.length > 0) {
+      throw ApiError.badRequest(
+        "Table has open orders and cannot be deactivated or deleted"
+      );
     }
   }
 }

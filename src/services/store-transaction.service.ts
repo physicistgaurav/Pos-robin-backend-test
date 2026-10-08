@@ -1,39 +1,43 @@
 import { StoreTransactionModel } from '../models/store-transaction.model';
 import { InventoryModel } from '../models/inventory.model';
 import { ApiError } from '../utils/ApiError';
-import { query } from '../config/database';
+import { query, transaction } from '../config/database';
 
 export class StoreTransactionService {
 
   static async create(data: any) {
-    const { inventory_purchase, ...txnData } = data;
+    // One transaction: the ledger entry and its stock movement must
+    // commit together — never a financial record without stock movement.
+    return transaction(async (client) => {
+      const { inventory_purchase, ...txnData } = data;
 
-    // 1. Create the store transaction
-    const transaction = await StoreTransactionModel.create(txnData);
+      // 1. Create the store transaction
+      const transaction = await StoreTransactionModel.create(txnData, client);
 
-    // 2. If inventory purchase, also create a stock movement
-    let stockMovement = null;
-    if (data.category === 'inventory_purchase' && inventory_purchase) {
-      const stock = await InventoryModel.getStockByProductId(inventory_purchase.product_id);
-      if (!stock) {
-        throw ApiError.badRequest('Product is not inventory-tracked. Enable tracking first.');
+      // 2. If inventory purchase, also create a stock movement
+      let stockMovement = null;
+      if (data.category === 'inventory_purchase' && inventory_purchase) {
+        const stock = await InventoryModel.getStockByProductId(client, inventory_purchase.product_id);
+        if (!stock) {
+          throw ApiError.badRequest('Product is not inventory-tracked. Enable tracking first.');
+        }
+
+        stockMovement = await InventoryModel.createMovement({
+          product_id: inventory_purchase.product_id,
+          movement_type: 'purchase',
+          quantity: inventory_purchase.quantity,
+          unit_cost: inventory_purchase.unit_cost,
+          total_cost: inventory_purchase.quantity * inventory_purchase.unit_cost,
+          store_txn_id: transaction.id,
+          supplier_name: inventory_purchase.supplier_name ?? data.party_name ?? null,
+          supplier_invoice: inventory_purchase.supplier_invoice ?? data.reference_number ?? null,
+          notes: data.notes ?? null,
+          created_by: data.created_by,
+        }, client);
       }
 
-      stockMovement = await InventoryModel.createMovement({
-        product_id: inventory_purchase.product_id,
-        movement_type: 'purchase',
-        quantity: inventory_purchase.quantity,
-        unit_cost: inventory_purchase.unit_cost,
-        total_cost: inventory_purchase.quantity * inventory_purchase.unit_cost,
-        store_txn_id: transaction.id,
-        supplier_name: inventory_purchase.supplier_name ?? data.party_name ?? null,
-        supplier_invoice: inventory_purchase.supplier_invoice ?? data.reference_number ?? null,
-        notes: data.notes ?? null,
-        created_by: data.created_by,
-      });
-    }
-
-    return { transaction, stock_movement: stockMovement };
+      return { transaction, stock_movement: stockMovement };
+    });
   }
 
   static async void(id: string, data: { void_reason: string; voided_by: string }) {

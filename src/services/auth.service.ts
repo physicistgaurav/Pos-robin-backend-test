@@ -236,8 +236,35 @@ export class AuthService {
       throw ApiError.notFound(AUTH_RESPONSE.NO_USER);
     }
 
+    // Never demote/deactivate the last active admin — that would lock
+    // everyone out of admin functions permanently.
+    if (user.role === "admin" && role !== "admin") {
+      const remaining = await UserModel.countActiveAdminsExcluding(userId);
+      if (remaining === 0) {
+        throw ApiError.badRequest(
+          "Cannot change this user's role: they are the last active admin"
+        );
+      }
+    }
+
     await UserModel.updateUserRole(userId, role);
 
     return true;
+  }
+
+  /** Prevent an admin from deactivating/deleting their own account or the last admin */
+  static async assertUserCanBeDisabled(targetId: string, actorId: string) {
+    if (targetId === actorId) {
+      throw ApiError.badRequest("You cannot deactivate or delete your own account");
+    }
+    const target = await UserModel.findById(targetId);
+    if (target && target.role === "admin" && target.is_active) {
+      const remaining = await UserModel.countActiveAdminsExcluding(targetId);
+      if (remaining === 0) {
+        throw ApiError.badRequest(
+          "Cannot disable the last active admin account"
+        );
+      }
+    }
   }
 }

@@ -1,4 +1,7 @@
+import { PoolClient } from "pg";
 import { query } from "../config/database";
+
+type Executor = { query: (...args: any[]) => Promise<any> };
 
 export class StoreTransactionModel {
 
@@ -15,8 +18,9 @@ export class StoreTransactionModel {
     notes?: string;
     transaction_date: Date;
     created_by: string;
-  }) {
-    const result = await query(`
+  }, client?: PoolClient) {
+    const executor: Executor = client ?? { query };
+    const result = await executor.query(`
       INSERT INTO store_transactions (
         type, category, amount, description,
         payment_method, reference_number,
@@ -120,14 +124,16 @@ export class StoreTransactionModel {
   }
 
   static async getSummary(filters: { from_date?: string; to_date?: string }) {
-    const conditions: string[] = [];
+    // Voided transactions must never appear in the books — void is the
+    // only supported correction path, so excluding them keeps reports honest.
+    const conditions: string[] = [`status = 'active'`];
     const values: any[] = [];
     let paramIdx = 1;
 
     if (filters.from_date) { conditions.push(`transaction_date >= $${paramIdx++}`); values.push(filters.from_date); }
     if (filters.to_date) { conditions.push(`transaction_date <= $${paramIdx++}`); values.push(filters.to_date); }
 
-    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    const where = `WHERE ${conditions.join(' AND ')}`;
 
     const result = await query(`
       SELECT

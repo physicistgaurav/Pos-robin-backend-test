@@ -61,7 +61,7 @@ export class ProductServices {
   }
 
   static async getById(id: string) {
-    const product = ProductModel.findById(id);
+    const product = await ProductModel.findById(id);
     if (!product) {
       throw ApiError.notFound(`Product with ID ${id} not found`);
     }
