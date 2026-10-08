@@ -90,6 +90,17 @@ client?: PoolClient
     customerId: string,
     options?: { limit?: number; offset?: number }
   ): Promise<CreditTransaction[]> {
+    const values: (string | number)[] = [customerId];
+    let pagination = '';
+    if (options?.limit !== undefined) {
+      values.push(options.limit);
+      pagination += ` LIMIT $${values.length}`;
+    }
+    if (options?.offset !== undefined) {
+      values.push(options.offset);
+      pagination += ` OFFSET $${values.length}`;
+    }
+
     const sql = `
       SELECT 
         ct.*,
@@ -101,14 +112,8 @@ client?: PoolClient
       LEFT JOIN invoice_records ir ON ct.invoice_id = ir.id
       LEFT JOIN users u ON ct.created_by = u.id
       WHERE ct.credit_customer_id = $1
-      ORDER BY ct.transaction_date DESC
-      ${options?.limit ? `LIMIT $2` : ''}
-      ${options?.offset ? `OFFSET $3` : ''};
+      ORDER BY ct.transaction_date DESC, ct.created_at DESC${pagination};
     `;
-
-    const values: string[] = [customerId];
-    if (options?.limit !== undefined) values.push(options.limit.toString());
-    if (options?.offset !== undefined) values.push(options.offset.toString());
 
     const result = await query(sql, values);
     return result.rows as CreditTransaction[];

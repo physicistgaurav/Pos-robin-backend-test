@@ -248,11 +248,57 @@ export class DashboardService {
             COALESCE(SUM(tax_amount) FILTER (WHERE status = 'completed'), 0) AS total_tax,
             COALESCE(SUM(service_charge_amount) FILTER (WHERE status = 'completed'), 0) AS total_service_charge,
     
-            /* ───── REAL MONEY FLOW ───── */
-            COALESCE(SUM(total_amount) FILTER (WHERE payment_status = 'paid'), 0) AS cash_collected,
-    
-            COALESCE(SUM(total_amount) FILTER (WHERE payment_status != 'paid' AND status != 'cancelled'), 0) AS outstanding_amount,
-    
+            /* ───── REAL MONEY FLOW ─────
+               cash_collected = money actually received in the window on order
+               payments (cash, card, wallets) MINUS refunds paid out in the window.
+               'credit' is NOT money received - it is a receivable, reported
+               separately as credit_sales / credit_repayments_received.
+               Payments later fully refunded (status 'refunded') still count as
+               received here because their refund is subtracted below. */
+            (
+              SELECT COALESCE(SUM(op.amount), 0)
+              FROM order_payments op
+              WHERE op.status IN ('completed', 'refunded')
+                AND op.payment_method <> 'credit'
+                AND op.payment_date BETWEEN $1 AND $2
+            ) - (
+              SELECT COALESCE(SUM(r.refund_amount), 0)
+              FROM order_refunds r
+              WHERE r.refund_method <> 'credit'
+                AND r.refund_date BETWEEN $1 AND $2
+            ) AS cash_collected,
+
+            (
+              SELECT COALESCE(SUM(r.refund_amount), 0)
+              FROM order_refunds r
+              WHERE r.refund_date BETWEEN $1 AND $2
+            ) AS refunds_issued,
+
+            (
+              SELECT COALESCE(SUM(ct.amount), 0)
+              FROM credit_transactions ct
+              WHERE ct.transaction_type = 'charge'
+                AND ct.transaction_date BETWEEN $1 AND $2
+            ) AS credit_sales,
+
+            (
+              SELECT COALESCE(SUM(ct.amount), 0)
+              FROM credit_transactions ct
+              WHERE ct.transaction_type = 'payment'
+                AND ct.transaction_date BETWEEN $1 AND $2
+            ) AS credit_repayments_received,
+
+            /* Completed orders still owing money: what is LEFT to collect
+               (balance_amount), not the full bill of part-paid orders. */
+            COALESCE(SUM(balance_amount) FILTER (
+              WHERE status = 'completed' AND payment_status IN ('unpaid', 'partial')
+            ), 0) AS outstanding_amount,
+
+            /* Orders still open (not yet completed / cancelled) - not receivables yet. */
+            COALESCE(SUM(total_amount) FILTER (
+              WHERE status NOT IN ('completed', 'cancelled')
+            ), 0) AS open_orders_amount,
+
             /* ───── AOV ───── */
             ROUND(
               AVG(total_amount) FILTER (WHERE status = 'completed'),
@@ -408,7 +454,11 @@ export class DashboardService {
     
           /* ───── CASH FLOW ───── */
           cash_collected: Number(s.cash_collected),
+          refunds_issued: Number(s.refunds_issued),
+          credit_sales: Number(s.credit_sales),
+          credit_repayments_received: Number(s.credit_repayments_received),
           outstanding_amount: Number(s.outstanding_amount),
+          open_orders_amount: Number(s.open_orders_amount),
     
           /* ───── PERFORMANCE ───── */
           avg_order_value: Number(s.avg_order_value),
@@ -876,11 +926,11 @@ query(`
           COUNT(*)                       AS order_count,
           SUM(discount_amount)           AS total_discount_given,
           ROUND(AVG(discount_amount), 2) AS avg_discount,
-          SUM(total_amount)              AS revenue_after_discount,
-          SUM(total_amount + discount_amount) AS gross_revenue,
+          SUM(subtotal - discount_amount) AS revenue_after_discount,
+          SUM(subtotal)                  AS gross_revenue,
           ROUND(
             SUM(discount_amount) * 100.0
-            / NULLIF(SUM(total_amount + discount_amount), 0),
+            / NULLIF(SUM(subtotal), 0),
           2)                             AS effective_discount_rate_pct
         FROM orders
         WHERE status = 'completed'

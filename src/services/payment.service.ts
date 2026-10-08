@@ -137,10 +137,51 @@ export class PaymentService {
           throw ApiError.badRequest(`Credit account is ${creditCustomer.status}.`);
         }
 
-        const availablePaisa = this.toPaisa(creditCustomer.available_credit);
-        if (amountPaisa > availablePaisa) {
+        // An order belongs to ONE credit account. Charging a different customer
+        // than the one already linked would split the receivable across ledgers.
+        if (order.credit_customer_id && order.credit_customer_id !== creditCustomerId) {
           throw ApiError.badRequest(
-            `Amount (${paymentData.amount}) exceeds available credit (${creditCustomer.available_credit})`
+            'This order is already linked to a different credit customer.'
+          );
+        }
+
+        // How much of this tender needs a NEW ledger charge?
+        // An invoice created earlier (InvoiceService.createInvoice) may already have
+        // charged this order to the account. Charging again would double-bill the
+        // customer, so a credit tender first "consumes" any charge that is not yet
+        // covered by a credit payment, and only the remainder hits the ledger.
+        const chargedRes = await client.query(
+          `SELECT COALESCE(SUM(CASE
+                    WHEN transaction_type = 'charge'      THEN amount
+                    WHEN transaction_type = 'credit_note' THEN -amount
+                    ELSE 0 END), 0) AS net_charged
+             FROM credit_transactions
+            WHERE order_id = $1 AND credit_customer_id = $2`,
+          [orderId, creditCustomerId]
+        );
+        const tenderedRes = await client.query(
+          `SELECT COALESCE(SUM(op.amount - COALESCE(r.refunded, 0)), 0) AS net_tendered
+             FROM order_payments op
+             LEFT JOIN (
+               SELECT payment_id, SUM(refund_amount) AS refunded
+                 FROM order_refunds GROUP BY payment_id
+             ) r ON r.payment_id = op.id
+            WHERE op.order_id = $1
+              AND op.payment_method = 'credit'
+              AND op.status = 'completed'`,
+          [orderId]
+        );
+        const uncoveredChargePaisa = Math.max(
+          0,
+          this.toPaisa(chargedRes.rows[0].net_charged) -
+            this.toPaisa(tenderedRes.rows[0].net_tendered)
+        );
+        const newChargePaisa = Math.max(0, amountPaisa - uncoveredChargePaisa);
+
+        const availablePaisa = this.toPaisa(creditCustomer.available_credit);
+        if (newChargePaisa > availablePaisa) {
+          throw ApiError.badRequest(
+            `Amount (${(newChargePaisa / 100).toFixed(2)}) exceeds available credit (${creditCustomer.available_credit})`
           );
         }
 
@@ -153,18 +194,21 @@ export class PaymentService {
         }
 
         // Create credit transaction → DB trigger updates current_balance
-        const currentBalance = Number(creditCustomer.current_balance);
-        await CreditTransactionModel.create({
-          credit_customer_id: creditCustomerId,
-          order_id: orderId,
-          transaction_type: 'charge',
-          amount: paymentData.amount,
-          balance_before: currentBalance,
-          balance_after: currentBalance + paymentData.amount,
-          due_date: calculateDueDate(creditCustomer.payment_terms_days).toISOString(),
-          notes: paymentData.notes ?? undefined,
-          created_by: paymentData.processed_by,
-        }, client);
+        if (newChargePaisa > 0) {
+          const currentBalance = Number(creditCustomer.current_balance);
+          const chargeAmount = newChargePaisa / 100;
+          await CreditTransactionModel.create({
+            credit_customer_id: creditCustomerId,
+            order_id: orderId,
+            transaction_type: 'charge',
+            amount: chargeAmount,
+            balance_before: currentBalance,
+            balance_after: currentBalance + chargeAmount,
+            due_date: calculateDueDate(creditCustomer.payment_terms_days).toISOString(),
+            notes: paymentData.notes ?? undefined,
+            created_by: paymentData.processed_by,
+          }, client);
+        }
 
         paymentData.credit_customer_id = creditCustomerId;
       }
@@ -330,17 +374,30 @@ export class PaymentService {
       // 7. Credit payments: reverse the charge on the customer's ledger so
       //    the refunded amount becomes available credit again.
       //    (credit_customer_id lives on the order, not on order_payments.)
+      //    Recorded as a 'credit_note', NOT a 'payment': a refunded credit sale
+      //    is not cash received from the customer and must not show up in
+      //    "payments received" on the dashboard / customer stats.
+      //    Applies to any account status - a suspended customer must still have
+      //    a refunded sale taken off their balance.
       if (payment.payment_method === 'credit' && order.credit_customer_id) {
         const ccRes = await client.query(
           `SELECT * FROM credit_customers WHERE id = $1 FOR UPDATE`,
           [order.credit_customer_id]
         );
         const cc = ccRes.rows[0];
-        if (cc && cc.status === 'active') {
+        if (cc) {
+          if (refundPaisa > this.toPaisa(cc.current_balance)) {
+            throw ApiError.conflict(
+              `Cannot reverse Rs. ${refundData.refund_amount} on the credit ledger: ` +
+              `the customer's outstanding balance is only Rs. ${Number(cc.current_balance).toFixed(2)} ` +
+              `(they have already settled part of this sale). ` +
+              `Refund the amount they paid in cash separately.`
+            );
+          }
           await CreditTransactionModel.create({
             credit_customer_id: order.credit_customer_id,
             order_id: orderId,
-            transaction_type: 'payment',
+            transaction_type: 'credit_note',
             amount: refundData.refund_amount,
             balance_before: Number(cc.current_balance),
             balance_after: Number(cc.current_balance) - refundData.refund_amount,

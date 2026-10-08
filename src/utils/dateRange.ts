@@ -47,16 +47,41 @@ function addNPTDays(utcDate: Date, days: number): Date {
   return fromNPTWallClock(npt);
 }
 
-/** Parse a 'YYYY-MM-DD' string as a Kathmandu calendar date -> NPT 00:00 as UTC ISO */
-export function nptDayStartUTC(dateStr: string): string {
-  const [y, m, d] = dateStr.slice(0, 10).split('-').map(Number);
-  return fromNPTWallClock(new Date(Date.UTC(y, m - 1, d, 0, 0, 0, 0))).toISOString();
+/**
+ * Query params arrive here as Date objects (Joi.date() converts them), but may
+ * also be plain strings. A date-only value ("2026-10-01", i.e. exactly UTC
+ * midnight) names a Kathmandu CALENDAR DAY; anything with a real time of day is
+ * an exact instant.
+ */
+type DateInput = string | Date;
+function parseDateInput(x: DateInput): { date: Date; dateOnly: boolean } {
+  if (typeof x === 'string') {
+    const date = new Date(x.trim());
+    if (isNaN(date.getTime())) throw new Error(`Invalid date: ${x}`);
+    return { date, dateOnly: /^\d{4}-\d{2}-\d{2}$/.test(x.trim()) };
+  }
+  if (isNaN(x.getTime())) throw new Error('Invalid date');
+  const dateOnly =
+    x.getUTCHours() === 0 && x.getUTCMinutes() === 0 && x.getUTCSeconds() === 0 && x.getUTCMilliseconds() === 0;
+  return { date: x, dateOnly };
 }
 
-/** Parse a 'YYYY-MM-DD' string as a Kathmandu calendar date -> NPT 23:59:59.999 as UTC ISO */
-export function nptDayEndUTC(dateStr: string): string {
-  const [y, m, d] = dateStr.slice(0, 10).split('-').map(Number);
-  return fromNPTWallClock(new Date(Date.UTC(y, m - 1, d, 23, 59, 59, 999))).toISOString();
+/** Start of the Kathmandu day (as a UTC ISO instant) for a date-only value, or for the day containing an instant */
+export function nptDayStartUTC(input: DateInput): string {
+  const { date, dateOnly } = parseDateInput(input);
+  if (dateOnly) {
+    return fromNPTWallClock(new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), 0, 0, 0, 0))).toISOString();
+  }
+  return startOfNPTDay(date).toISOString();
+}
+
+/** End (23:59:59.999) of the Kathmandu day (as a UTC ISO instant) for a date-only value, or for the day containing an instant */
+export function nptDayEndUTC(input: DateInput): string {
+  const { date, dateOnly } = parseDateInput(input);
+  if (dateOnly) {
+    return fromNPTWallClock(new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), 23, 59, 59, 999))).toISOString();
+  }
+  return endOfNPTDay(date).toISOString();
 }
 
 /** Last N full Kathmandu days ending now: from = NPT 00:00 (N-1 days ago), to = now */
@@ -79,21 +104,26 @@ export function todayNPT(): { from: string; to: string } {
 
 export function resolveDateRange(
   mode:        RangeMode | undefined,
-  customFrom?: string,
-  customTo?:   string,
+  customFrom?: DateInput,
+  customTo?:   DateInput,
 ): DateRange {
   const now = new Date();
 
-  // ── Custom range: YYYY-MM-DD is a Kathmandu calendar day ───────────────
+  // ── Custom range ───────────────────────────────────────────────────────
+  // Date-only values (2026-10-01) are Kathmandu calendar days: from = 00:00 NPT,
+  // to = 23:59:59.999 NPT. Full timestamps are used exactly as given.
   if (customFrom && customTo) {
+    const f = parseDateInput(customFrom);
+    const t = parseDateInput(customTo);
     return {
-      from: nptDayStartUTC(customFrom),
-      to:   nptDayEndUTC(customTo),
+      from: f.dateOnly ? nptDayStartUTC(customFrom) : f.date.toISOString(),
+      to:   t.dateOnly ? nptDayEndUTC(customTo)     : t.date.toISOString(),
       mode: 'custom',
     };
   }
 
-  const effectiveMode: RangeMode = mode ?? 'weekly';
+  // 'custom' without from/to (allowed by one validator) falls back to weekly
+  const effectiveMode: RangeMode = mode && mode !== ('custom' as any) ? mode : 'weekly';
 
   switch (effectiveMode) {
 

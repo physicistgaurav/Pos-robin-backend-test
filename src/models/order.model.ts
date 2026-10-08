@@ -473,13 +473,13 @@ export class OrderModel {
     }
     
     if (params.from_date) {
-      whereClauses.push(`DATE(orders.order_time) >= $${paramIndex}`);
+      whereClauses.push(`(orders.order_time AT TIME ZONE 'Asia/Kathmandu')::date >= $${paramIndex}::date`);
       values.push(params.from_date);
       paramIndex++;
     }
     
     if (params.to_date) {
-      whereClauses.push(`DATE(orders.order_time) <= $${paramIndex}`);
+      whereClauses.push(`(orders.order_time AT TIME ZONE 'Asia/Kathmandu')::date <= $${paramIndex}::date`);
       values.push(params.to_date);
       paramIndex++;
     }

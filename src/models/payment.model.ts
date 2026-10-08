@@ -235,5 +235,19 @@ export class PaymentModel {
   
     const executor: Executor = client ?? { query };
     await executor.query(sql, [orderId]);
+
+    // Keep the invoice of a normal (non-credit) order in step with the order.
+    // Credit invoices follow the credit ledger instead (DB trigger).
+    await executor.query(
+      `UPDATE invoice_records ir
+          SET paid_amount    = o.paid_amount,
+              payment_status = o.payment_status,
+              updated_at     = NOW()
+         FROM orders o
+        WHERE o.id = ir.order_id
+          AND ir.order_id = $1
+          AND ir.credit_customer_id IS NULL`,
+      [orderId]
+    );
   }
 }

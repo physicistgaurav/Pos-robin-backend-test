@@ -5,6 +5,7 @@ import { CreditCustomerModel } from "../models/credit-customer.model";
 import { CreditTransactionModel } from "../models/credit-transaction.model";
 import { InvoiceModel } from "../models/invoice.model";
 import { OrderModel } from "../models/order.model";
+import { PaymentModel } from "../models/payment.model";
 import { ApiError } from "../utils/ApiError";
 import { buildPaginationMeta, calculatePagination } from "../utils/helpers";
 
@@ -50,6 +51,19 @@ export class InvoiceService {
     if (data.credit_customer_id) {
       // Credit invoice: Use transaction for atomicity and locking to prevent race conditions
       return await transaction(async (client) => {
+        // 3b. Lock the ORDER first (same order as PaymentService: order -> customer)
+        //     and re-read its money fields: the copy fetched above is not locked
+        //     and may be stale by the time we charge the ledger.
+        const lockedOrderRes = await client.query(
+          `SELECT status, total_amount, balance_amount, credit_customer_id
+             FROM orders WHERE id = $1 FOR UPDATE`,
+          [data.order_id]
+        );
+        const lockedOrder = lockedOrderRes.rows[0];
+        if (!lockedOrder || lockedOrder.status !== "completed") {
+          throw ApiError.badRequest(INVOICE_ERROR_MESSAGES.ORDER_NOT_COMPLETED);
+        }
+
         // 4. Fetch and lock credit customer
         const customerQuery = `
           SELECT * FROM credit_customers
@@ -71,19 +85,55 @@ export class InvoiceService {
           throw ApiError.badRequest(INVOICE_ERROR_MESSAGES.CUSTOMER_NOT_ACTIVE);
         }
 
-        // Check credit limit (using locked row for accurate current_balance)
-        // Check credit limit (using locked row for accurate current_balance)
+        // Has this order already been charged to a credit account?
+        // (e.g. the cashier settled it with the "credit" payment method.)
+        // Charging again would double-bill the customer, so in that case the
+        // invoice is only LINKED to the existing charge.
+        const priorRes = await client.query(
+          `SELECT credit_customer_id,
+                  COALESCE(SUM(CASE
+                    WHEN transaction_type = 'charge'      THEN amount
+                    WHEN transaction_type = 'credit_note' THEN -amount
+                    ELSE 0 END), 0) AS net_charged
+             FROM credit_transactions
+            WHERE order_id = $1
+              AND transaction_type IN ('charge', 'credit_note')
+            GROUP BY credit_customer_id`,
+          [order.id]
+        );
+        const chargedToOther = priorRes.rows.find(
+          (r: any) =>
+            r.credit_customer_id !== data.credit_customer_id &&
+            Number(r.net_charged) > 0
+        );
+        if (chargedToOther) {
+          throw ApiError.badRequest(
+            "This order has already been charged to a different credit customer."
+          );
+        }
+        const alreadyChargedToThisCustomer = priorRes.rows.some(
+          (r: any) =>
+            r.credit_customer_id === data.credit_customer_id &&
+            Number(r.net_charged) > 0
+        );
+
+        // Amount that still has to be put on the ledger: what the customer has
+        // NOT already paid for this order (never the full total when part of the
+        // bill was paid in cash).
         const currentBalance = Number(creditCustomer.current_balance);
         const creditLimit = Number(creditCustomer.credit_limit);
-        const orderTotal = Number(order.total_amount); // ← ADD THIS: force to number
+        const orderBalance = Number(lockedOrder.balance_amount);
+        const amountToCharge = alreadyChargedToThisCustomer ? 0 : orderBalance;
 
-        const newBalance = currentBalance + orderTotal;
-
-        console.log("newBalance", newBalance, creditLimit);
-
-        if (newBalance > creditLimit) {
+        if (!alreadyChargedToThisCustomer && amountToCharge <= 0) {
           throw ApiError.badRequest(
-            `Credit limit exceeded. Available credit: Rs. ${creditLimit - currentBalance}`
+            "This order is already fully paid; there is nothing to put on credit."
+          );
+        }
+
+        if (currentBalance + amountToCharge > creditLimit) {
+          throw ApiError.badRequest(
+            `Credit limit exceeded. Available credit: Rs. ${(creditLimit - currentBalance).toFixed(2)}`
           );
         }
 
@@ -100,7 +150,9 @@ export class InvoiceService {
         }
 
         // 6. Create invoice (override payment_status and paid_amount for credit)
-        const invoice = await InvoiceModel.create(
+        let invoice;
+        try {
+          invoice = await InvoiceModel.create(
           {
             order_id: data.order_id,
             credit_customer_id: data.credit_customer_id,
@@ -125,21 +177,66 @@ export class InvoiceService {
           },
           client
         ); // Pass client for transaction
+        } catch (err: any) {
+          // uq_invoice_records_order_id: another request invoiced this order first
+          if (err?.code === "23505") {
+            throw ApiError.conflict(INVOICE_ERROR_MESSAGES.INVOICE_ALREADY_EXISTS);
+          }
+          throw err;
+        }
 
-        // 7. Create charge transaction (do not pass balance_before/after; let DB trigger handle)
-        await CreditTransactionModel.create(
-          {
-            credit_customer_id: creditCustomer.id,
-            order_id: order.id,
-            invoice_id: invoice.id,
-            transaction_type: "charge",
-            amount: order.total_amount,
-            due_date: dueDate,
-            notes: `Invoice ${invoice.invoice_number}`,
-            created_by: data.created_by,
-          },
-          client
-        ); // Pass client for transaction
+        // 7. Ledger entry (balance_before/after are filled by the DB trigger)
+        if (alreadyChargedToThisCustomer) {
+          // Link the invoice to the charge that already exists; the DB trigger
+          // then keeps invoice paid/unpaid in step with the customer's payments.
+          await client.query(
+            `UPDATE credit_transactions
+                SET invoice_id = $1,
+                    due_date   = COALESCE(due_date, $2::date)
+              WHERE order_id = $3
+                AND credit_customer_id = $4
+                AND transaction_type = 'charge'
+                AND invoice_id IS NULL`,
+            [invoice.id, dueDate, order.id, creditCustomer.id]
+          );
+        } else {
+          await CreditTransactionModel.create(
+            {
+              credit_customer_id: creditCustomer.id,
+              order_id: order.id,
+              invoice_id: invoice.id,
+              transaction_type: "charge",
+              amount: amountToCharge,
+              due_date: dueDate,
+              notes: `Invoice ${invoice.invoice_number}`,
+              created_by: data.created_by,
+            },
+            client
+          );
+
+          // The bill is now settled by credit: record that tender on the order
+          // too, exactly like paying with the "credit" method at the counter.
+          // Otherwise the same money is reported twice - as an unpaid order AND
+          // as credit outstanding.
+          await PaymentModel.createPayment(
+            {
+              order_id: order.id,
+              payment_method: "credit",
+              amount: amountToCharge,
+              status: "completed",
+              processed_by: data.created_by,
+              notes: `Charged to credit account via invoice ${invoice.invoice_number}`,
+            },
+            client
+          );
+
+          if (!lockedOrder.credit_customer_id) {
+            await client.query(
+              `UPDATE orders SET credit_customer_id = $1, updated_at = NOW() WHERE id = $2`,
+              [creditCustomer.id, order.id]
+            );
+          }
+        }
 
         // 8. Get full invoice details
         return await this.getInvoiceById(invoice.id, client);

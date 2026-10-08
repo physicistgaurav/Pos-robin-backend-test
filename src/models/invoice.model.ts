@@ -145,12 +145,12 @@ export class InvoiceModel {
       u.full_name AS created_by_name,
       ir.total_amount - ir.paid_amount AS balance_amount,
       CASE 
-        WHEN ir.due_date < CURRENT_DATE AND ir.payment_status != 'paid' 
+        WHEN ir.due_date < (NOW() AT TIME ZONE 'Asia/Kathmandu')::date AND ir.payment_status != 'paid' 
         THEN true ELSE false 
       END AS is_overdue,
       CASE 
-        WHEN ir.due_date < CURRENT_DATE AND ir.payment_status != 'paid' 
-        THEN CURRENT_DATE - ir.due_date 
+        WHEN ir.due_date < (NOW() AT TIME ZONE 'Asia/Kathmandu')::date AND ir.payment_status != 'paid' 
+        THEN (NOW() AT TIME ZONE 'Asia/Kathmandu')::date - ir.due_date 
         ELSE 0 
       END AS days_overdue
     FROM invoice_records ir
@@ -268,7 +268,7 @@ export class InvoiceModel {
     // Overdue filter
     if (params.is_overdue) {
       conditions.push(
-        `ir.due_date < CURRENT_DATE AND ir.payment_status != 'paid'`
+        `ir.due_date < (NOW() AT TIME ZONE 'Asia/Kathmandu')::date AND ir.payment_status != 'paid'`
       );
     }
 
@@ -298,12 +298,12 @@ export class InvoiceModel {
     cc.company_name AS credit_company_name,
     u.full_name AS created_by_name,
     CASE 
-      WHEN ir.due_date < CURRENT_DATE AND ir.payment_status != 'paid' THEN true
+      WHEN ir.due_date < (NOW() AT TIME ZONE 'Asia/Kathmandu')::date AND ir.payment_status != 'paid' THEN true
       ELSE false
     END as is_overdue,
     CASE 
-      WHEN ir.due_date < CURRENT_DATE AND ir.payment_status != 'paid' 
-      THEN CURRENT_DATE - ir.due_date
+      WHEN ir.due_date < (NOW() AT TIME ZONE 'Asia/Kathmandu')::date AND ir.payment_status != 'paid' 
+      THEN (NOW() AT TIME ZONE 'Asia/Kathmandu')::date - ir.due_date
       ELSE 0
     END as days_overdue,
     ir.total_amount - ir.paid_amount as balance_amount
@@ -344,12 +344,12 @@ Find by customer ID
     ir.*,
     o.order_number,
     CASE 
-      WHEN ir.due_date < CURRENT_DATE AND ir.payment_status != 'paid' THEN true
+      WHEN ir.due_date < (NOW() AT TIME ZONE 'Asia/Kathmandu')::date AND ir.payment_status != 'paid' THEN true
       ELSE false
     END as is_overdue,
     CASE 
-      WHEN ir.due_date < CURRENT_DATE AND ir.payment_status != 'paid' 
-      THEN CURRENT_DATE - ir.due_date
+      WHEN ir.due_date < (NOW() AT TIME ZONE 'Asia/Kathmandu')::date AND ir.payment_status != 'paid' 
+      THEN (NOW() AT TIME ZONE 'Asia/Kathmandu')::date - ir.due_date
       ELSE 0
     END as days_overdue,
     ir.total_amount - ir.paid_amount as balance_amount
@@ -466,7 +466,7 @@ Get summary
     COUNT(*) FILTER (WHERE payment_status = 'partial') as partial_invoices,
     COUNT(*) FILTER (WHERE credit_customer_id IS NOT NULL) as credit_invoices,
     COUNT(*) FILTER (WHERE credit_customer_id IS NULL) as cash_invoices,
-    COUNT(*) FILTER (WHERE due_date < CURRENT_DATE AND payment_status != 'paid') as overdue_invoices
+    COUNT(*) FILTER (WHERE due_date < (NOW() AT TIME ZONE 'Asia/Kathmandu')::date AND payment_status != 'paid') as overdue_invoices
   FROM invoice_records
   ${whereClause};
 `;
@@ -500,7 +500,7 @@ Get daily summary
 Get overdue invoices
 */
   static async getOverdueInvoices(): Promise<any[]> {
-    const sql = `SELECT     ir.*,    o.order_number,    cc.customer_name AS credit_customer_name,    cc.company_name AS credit_company_name,    cc.customer_phone AS credit_customer_phone,    CURRENT_DATE - ir.due_date as days_overdue,    ir.total_amount - ir.paid_amount as balance_amount  FROM invoice_records ir  LEFT JOIN orders o ON ir.order_id = o.id  LEFT JOIN credit_customers cc ON ir.credit_customer_id = cc.id  WHERE ir.due_date < CURRENT_DATE    AND ir.payment_status != 'paid'  ORDER BY ir.due_date ASC`;
+    const sql = `SELECT     ir.*,    o.order_number,    cc.customer_name AS credit_customer_name,    cc.company_name AS credit_company_name,    cc.customer_phone AS credit_customer_phone,    (NOW() AT TIME ZONE 'Asia/Kathmandu')::date - ir.due_date as days_overdue,    ir.total_amount - ir.paid_amount as balance_amount  FROM invoice_records ir  LEFT JOIN orders o ON ir.order_id = o.id  LEFT JOIN credit_customers cc ON ir.credit_customer_id = cc.id  WHERE ir.due_date < (NOW() AT TIME ZONE 'Asia/Kathmandu')::date    AND ir.payment_status != 'paid'  ORDER BY ir.due_date ASC`;
     const result = await query(sql);
     return result.rows;
   }
