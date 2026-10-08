@@ -512,8 +512,7 @@ query(`
       SUM(total_price) / NULLIF(SUM(quantity), 0),
     2)                                     AS avg_item_price
   FROM v_food_drink_sales
-  WHERE period_day >= ($1::timestamptz AT TIME ZONE 'Asia/Kathmandu')
-    AND period_day <= ($2::timestamptz AT TIME ZONE 'Asia/Kathmandu')
+  WHERE order_id IN (SELECT id FROM orders WHERE order_time BETWEEN $1 AND $2)
   GROUP BY item_type
   ORDER BY revenue DESC
 `, [fromTs, toTs]),
@@ -530,8 +529,7 @@ query(`
     SUM(quantity)                AS items_sold,
     SUM(total_price)             AS revenue
   FROM v_food_drink_sales
-  WHERE period_day >= ($1::timestamptz AT TIME ZONE 'Asia/Kathmandu')
-    AND period_day <= ($2::timestamptz AT TIME ZONE 'Asia/Kathmandu')
+  WHERE order_id IN (SELECT id FROM orders WHERE order_time BETWEEN $1 AND $2)
   GROUP BY period_day, item_type
   ORDER BY 1 ASC, 2 ASC
 `, [fromTs, toTs]),
@@ -553,8 +551,7 @@ query(`
       / NULLIF(SUM(SUM(total_price)) OVER (PARTITION BY item_type), 0),
     2)                                     AS revenue_pct_within_dept
   FROM v_food_drink_sales
-  WHERE period_day >= ($1::timestamptz AT TIME ZONE 'Asia/Kathmandu')
-    AND period_day <= ($2::timestamptz AT TIME ZONE 'Asia/Kathmandu')
+  WHERE order_id IN (SELECT id FROM orders WHERE order_time BETWEEN $1 AND $2)
     AND main_category_id IS NOT NULL
   GROUP BY item_type, category_name, category_id
   ORDER BY item_type, revenue DESC
@@ -575,8 +572,7 @@ query(`
       / NULLIF(SUM(SUM(total_price)) OVER (PARTITION BY item_type), 0),
     2)                                     AS revenue_pct_within_dept
   FROM v_food_drink_sales
-  WHERE period_day >= ($1::timestamptz AT TIME ZONE 'Asia/Kathmandu')
-    AND period_day <= ($2::timestamptz AT TIME ZONE 'Asia/Kathmandu')
+  WHERE order_id IN (SELECT id FROM orders WHERE order_time BETWEEN $1 AND $2)
   GROUP BY item_type, main_category_name, sub_category_name, sub_category_id
   ORDER BY item_type, revenue DESC
 `, [fromTs, toTs]),
@@ -604,8 +600,7 @@ query(`
         ORDER BY SUM(total_price) DESC
       )                                      AS rn
     FROM v_food_drink_sales
-    WHERE period_day >= ($1::timestamptz AT TIME ZONE 'Asia/Kathmandu')
-    AND period_day <= ($2::timestamptz AT TIME ZONE 'Asia/Kathmandu')
+    WHERE order_id IN (SELECT id FROM orders WHERE order_time BETWEEN $1 AND $2)
     GROUP BY item_type, product_id
   )
   SELECT r.*, p.name AS product_name
